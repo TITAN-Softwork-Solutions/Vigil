@@ -1,5 +1,3 @@
-// src/notify.rs
-
 use crate::alerts::Alert;
 use std::{
     collections::HashMap,
