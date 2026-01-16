@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-const TRACE_NAME: &str = "TITAN-Mercenary-Lite";
+const TRACE_NAME: &str = "TITAN-Operative-CE";
 
 const KERNEL_PROCESS_GUID: &str = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716";
 const KERNEL_FILE_GUID: &str = "edd08927-9cc4-4e65-b970-c2560fb5c289";
