@@ -41,14 +41,10 @@ fn status_ok(status: i32) -> bool {
     status >= 0
 }
 
-/// FAST: no DuplicateHandle, no GetFinalPathNameByHandleW.
-/// Just build: FileObjectPtr -> {pid,...} for trusted processes.
-/// This is enough to detect handle-duping later when ETW gives FileObject.
 pub fn collect_file_objects_for_pids(trusted_pids: &[u32]) -> Result<HashMap<u64, HashSet<u32>>> {
     let trusted_set: HashSet<u32> = trusted_pids.iter().copied().collect();
 
-    // NtQuerySystemInformation needs a dynamic buffer
-    let mut buf_size: usize = 8 * 1024 * 1024; // start 8MB
+    let mut buf_size: usize = 8 * 1024 * 1024;
     let mut buf: Vec<u8> = vec![0u8; buf_size];
 
     let mut needed: u32 = 0;

@@ -4,6 +4,8 @@ Lightweight Windows blue-team telemetry utility that detects **untrusted process
 
 ---
 
+![NOTIF BAR](./img/NOTIF_BAR.png)
+
 ## What It Detects
 
 The engine monitors kernel-level file I/O events and raises alerts when:
