@@ -1,0 +1,25 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[registries.crates-io]
+protocol = "sparse"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = """
+-C link-arg=/DYNAMICBASE
+-C link-arg=/HIGHENTROPYVA
+-C link-arg=/NXCOMPAT
+-C link-arg=/guard:cf
+-C link-arg=/CETCOMPAT
+-C link-arg=/Brepro
+-C link-arg=/INCREMENTAL:NO
+-C link-arg=/OPT:REF
+-C link-arg=/OPT:ICF
+-C target-cpu=native
+"""
+
+[alias]
+bd = "build --locked"
+br = "build --release --locked"
+cd = "check --locked"
+cr = "check --release --locked"

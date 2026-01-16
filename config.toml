@@ -1,0 +1,79 @@
+[general]
+# Set false to show the "[TML] running ..." banner
+quiet = false
+
+# Write alerts as JSONL to %LOCALAPPDATA%\TITAN-Mercenary-Lite\logs\alerts.jsonl
+jsonl = true
+
+# Dedupe repeated alerts per (pid + target) for this many ms
+suppress_ms = 1500
+
+
+[allowlist]
+# Strong allowlist: must be Authenticode signed AND signer subject contains one of these strings.
+# (Case-insensitive)
+signer_subject_allow = [
+    "Microsoft Corporation",
+    "Google LLC",
+    "Brave Software, Inc.",
+    "Mozilla Corporation",
+    "Opera Software",
+    "Discord Inc"
+]
+
+# Optional legacy fallback allowlist by process name suffix (NOT RECOMMENDED)
+# Only enable if you really need it.
+process_name_allow = [
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "discord.exe"
+]
+
+
+[watch]
+# You can define named protected rules like this:
+# substring = lowercased matching pattern
+# name = what shows in toast/logs
+
+[[watch.protected]]
+substring = "\\google\\chrome\\user data\\default\\login data"
+name = "Chrome Passwords"
+
+[[watch.protected]]
+substring = "\\google\\chrome\\user data\\default\\network\\cookies"
+name = "Chrome Cookies"
+
+[[watch.protected]]
+substring = "\\braveSoftware\\brave-browser\\user data\\default\\login data"
+name = "Brave Passwords"
+
+[[watch.protected]]
+substring = "\\braveSoftware\\brave-browser\\user data\\default\\network\\cookies"
+name = "Brave Cookies"
+
+[[watch.protected]]
+substring = "\\microsoft\\edge\\user data\\default\\login data"
+name = "MsEdge Passwords"
+
+[[watch.protected]]
+substring = "\\microsoft\\edge\\user data\\default\\network\\cookies"
+name = "MsEdge Cookies"
+
+[[watch.protected]]
+substring = "\\mozilla\\firefox\\profiles"
+name = "Firefox Profile Store"
+
+[[watch.protected]]
+substring = "\\discord\\local storage\\leveldb"
+name = "Discord Token Store"
+
+[[watch.protected]]
+substring = "\\.minecraft\\"
+name = "Minecraft Data"
+
+[[watch.protected]]
+substring = "\\roblox\\cookies"
+name = "Roblox Cookies"
