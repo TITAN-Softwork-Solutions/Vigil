@@ -108,7 +108,7 @@ cargo run --release -- --config operative.toml --verbose
 Logs are written to:
 
 ```
-%LOCALAPPDATA%\TITAN-Operative-Lite\logs
+%LOCALAPPDATA%\TITAN-Operative-CE\logs
 ```
 
 ---
