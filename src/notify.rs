@@ -79,7 +79,7 @@ fn show_toast(headline: &str) -> windows::core::Result<()> {
     </binding>
   </visual>
 </toast>"#,
-        xml_escape("TITAN Operative Alert"),
+        xml_escape("TITAN Vigil Alert"),
         xml_escape(headline),
     );
 
@@ -91,10 +91,11 @@ fn show_toast(headline: &str) -> windows::core::Result<()> {
     let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))?;
     notifier.Show(&toast)?;
 
-    // Keep toast objects alive briefly (prevents premature drop issues)
     let now = Instant::now();
     let store = ACTIVE_TOASTS.get_or_init(|| Mutex::new(Vec::new()));
+
     let mut v = store.lock().unwrap();
+
     v.retain(|(t, _)| now.duration_since(*t) < Duration::from_secs(120));
     v.push((now, toast));
 

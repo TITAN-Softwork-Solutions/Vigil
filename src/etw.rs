@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-const TRACE_NAME: &str = "TITAN-Operative-CE";
+const TRACE_NAME: &str = "TITAN-Vigil";
 
 const KERNEL_PROCESS_GUID: &str = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716";
 const KERNEL_FILE_GUID: &str = "edd08927-9cc4-4e65-b970-c2560fb5c289";
@@ -44,14 +44,14 @@ pub fn start_etw(engine: Arc<Engine>) -> Result<EtwSession> {
     let stop_flag_thread = stop_flag.clone();
 
     let join = thread::Builder::new()
-        .name("tml-etw-worker".to_string())
+        .name("vigil-etw-worker".to_string())
         .spawn(move || {
             for attempt in 0..2 {
                 match run_trace(engine.clone(), stop_flag_thread.clone()) {
                     Ok(()) => break,
                     Err(e) => {
                         let msg = format!("{e:?}");
-                        eprintln!("[TML][ETW] start failed (attempt {}): {}", attempt + 1, msg);
+                        eprintln!("[ETW] start failed (attempt {}): {}", attempt + 1, msg);
 
                         if msg.contains("AlreadyExist") && attempt == 0 {
                             let _ = stop_trace_by_name(TRACE_NAME);

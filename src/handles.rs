@@ -68,8 +68,7 @@ pub fn collect_file_objects_for_pids(trusted_pids: &[u32]) -> Result<HashMap<u64
             buf.resize(buf_size, 0u8);
             continue;
         }
-
-        // fail closed
+        
         return Ok(HashMap::new());
     }
 

@@ -1,12 +1,13 @@
 [package]
-name = "titan_operative_community"
+name = "titan_vigil"
 version = "0.1.0"
 edition = "2024"
 authors = ["dutchpsycho", "TITAN Softwork Solutions"]
-repository = "https://github.com/TITAN-Softwork-Solutions/Mercenary-Lite"
+repository = "https://github.com/TITAN-Softwork-Solutions/Vigil"
+license = "AGPL-3"
 
 [[bin]]
-name = "titanopv"
+name = "tssvigil"
 path = "src/main.rs"
 
 [dependencies]
@@ -36,17 +37,13 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Gdi"
 ] }
 
-winrt-notification = "0.5.1"
-
-yara-x = "1.11.0"
 ferrisetw = "1.2.0"
 anyhow = "1"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-time = { version = "0.3", features = ["formatting"] }
 toml = "0.9.11+spec-1.1.0"
+serde_json = "1.0.149"
 
 [build-dependencies]
 winres = "0.1"

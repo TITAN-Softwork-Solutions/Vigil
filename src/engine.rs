@@ -1,4 +1,4 @@
-use crate::{alerts::Alert, config::Config, handles, process, sigcheck};
+use crate::{alerts::Alert, config::Config, handles, process, wintrust};
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use std::{
@@ -244,11 +244,11 @@ impl Engine {
     }
 
     #[inline]
-    fn trust_for_path(&self, path: &str) -> sigcheck::TrustResult {
-        let trust = sigcheck::verify_file_signature(path);
+    fn trust_for_path(&self, path: &str) -> wintrust::TrustResult {
+        let trust = wintrust::verify_file_signature(path);
 
         if !trust.is_signed {
-            return sigcheck::TrustResult {
+            return wintrust::TrustResult {
                 is_signed: false,
                 is_trusted: false,
                 signer_subject: None,
@@ -269,14 +269,14 @@ impl Engine {
                 .iter()
                 .any(|needle| subj.contains(needle));
 
-            return sigcheck::TrustResult {
+            return wintrust::TrustResult {
                 is_signed: true,
                 is_trusted: ok,
                 signer_subject: trust.signer_subject,
             };
         }
 
-        sigcheck::TrustResult {
+        wintrust::TrustResult {
             is_signed: true,
             is_trusted: true,
             signer_subject: trust.signer_subject,
