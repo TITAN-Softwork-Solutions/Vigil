@@ -1,4 +1,4 @@
-# TITAN Operative Lite (Community Edition)
+# TITAN Vigil
 
 Lightweight Windows blue-team telemetry utility that detects **untrusted processes accessing protected filesystem resources** using Kernel ETW.
 
@@ -98,19 +98,19 @@ process_name_allow = ["chrome.exe", "msedge.exe"]
 ## Running
 
 ```bash
-cargo run --release -- --config operative.toml
+cargo run --release -- --config config.toml
 ```
 
 Verbose output:
 
 ```bash
-cargo run --release -- --config operative.toml --verbose
+cargo run --release -- --config config.toml --verbose
 ```
 
 Logs are written to:
 
 ```
-%LOCALAPPDATA%\TITAN-Operative-CE\logs
+%LOCALAPPDATA%\TITAN-Vigil-CE\logs
 ```
 
 ---

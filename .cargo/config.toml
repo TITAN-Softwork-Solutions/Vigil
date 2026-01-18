@@ -9,7 +9,6 @@ rustflags = """
 -C link-arg=/DYNAMICBASE
 -C link-arg=/HIGHENTROPYVA
 -C link-arg=/NXCOMPAT
--C link-arg=/guard:cf
 -C link-arg=/CETCOMPAT
 -C link-arg=/Brepro
 -C link-arg=/INCREMENTAL:NO
