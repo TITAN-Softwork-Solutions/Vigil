@@ -3,12 +3,14 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct Cli {
     pub config: PathBuf,
+    pub config_explicit: bool,
     pub verbose: bool,
 }
 
 impl Cli {
     pub fn parse() -> Self {
         let mut config = PathBuf::from("config.toml");
+        let mut config_explicit = false;
         let mut verbose = false;
 
         let mut args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -19,6 +21,7 @@ impl Cli {
                 "--config" | "-c" => {
                     if i + 1 < args.len() {
                         config = PathBuf::from(&args[i + 1]);
+                        config_explicit = true;
                         i += 2;
                     } else {
                         i += 1;
@@ -34,6 +37,10 @@ impl Cli {
             }
         }
 
-        Self { config, verbose }
+        Self {
+            config,
+            config_explicit,
+            verbose,
+        }
     }
 }

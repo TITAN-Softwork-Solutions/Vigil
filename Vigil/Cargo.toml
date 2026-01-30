@@ -20,6 +20,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Console",
     "Win32_System_Memory",
     "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Etw",
     "Win32_Security",
     "Win32_Security_WinTrust",
     "Win32_Security_Cryptography",
@@ -34,10 +35,9 @@ windows = { version = "0.62.2", features = [
     "Data_Xml_Dom",
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
+    "Win32_System_Time",
     "Win32_Graphics_Gdi"
 ] }
-
-ferrisetw = "1.2.0"
 anyhow = "1"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"

@@ -4,7 +4,7 @@ Lightweight Windows blue-team telemetry utility that detects **untrusted process
 
 ---
 
-![NOTIF BAR](./img/NOTIF_BAR.png)
+![NOTIF BAR](Image/NOTIF_BAR.png)
 
 ## What It Detects
 
