@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+const WHITELIST_TTL: Duration = Duration::from_secs(10 * 60);
+const WHITELIST_MAX: usize = 100_000;
+
 #[derive(Debug, Clone)]
 pub struct ProcMeta {
     pub image: String,
@@ -22,7 +25,13 @@ pub struct Engine {
     proc_cache: Mutex<HashMap<u32, ProcMeta>>,
     filekey_cache: Mutex<HashMap<u64, String>>,
     last_alert: Mutex<HashMap<u64, Instant>>,
-    whitelisted_file_objects: Mutex<HashMap<u64, HashSet<u32>>>,
+    whitelisted_file_objects: Mutex<HashMap<u64, WhitelistedFileObject>>,
+}
+
+#[derive(Debug, Clone)]
+struct WhitelistedFileObject {
+    owners: HashSet<u32>,
+    last_seen: Instant,
 }
 
 impl Engine {
@@ -71,9 +80,17 @@ impl Engine {
             return Ok(());
         }
 
+        let now = Instant::now();
         let mut wl = self.whitelisted_file_objects.lock();
         for (file_object, pids_set) in entries {
-            wl.entry(file_object).or_default().extend(pids_set);
+            let entry = wl
+                .entry(file_object)
+                .or_insert_with(|| WhitelistedFileObject {
+                    owners: HashSet::new(),
+                    last_seen: now,
+                });
+            entry.owners.extend(pids_set);
+            entry.last_seen = now;
         }
 
         Ok(())
@@ -86,15 +103,15 @@ impl Engine {
             return;
         }
 
-        let trust = self.trust_for_path(&image);
+        let (is_trusted, signer_subject) = self.trust_for_image(&image);
 
         self.proc_cache.lock().insert(
             pid,
             ProcMeta {
                 image,
                 ts: Instant::now(),
-                is_trusted_signed: trust.is_trusted,
-                signer_subject: trust.signer_subject,
+                is_trusted_signed: is_trusted,
+                signer_subject,
             },
         );
     }
@@ -129,14 +146,15 @@ impl Engine {
         }
 
         let img = process::get_process_image_path(pid).unwrap_or_else(|| "unknown".to_string());
+        let (is_trusted, signer_subject) = self.trust_for_image(&img);
 
         self.proc_cache.lock().insert(
             pid,
             ProcMeta {
                 image: img.clone(),
                 ts: Instant::now(),
-                is_trusted_signed: false,
-                signer_subject: None,
+                is_trusted_signed: is_trusted,
+                signer_subject,
             },
         );
 
@@ -166,12 +184,29 @@ impl Engine {
 
     #[inline]
     pub fn is_pid_trusted(&self, pid: u32, proc_path: &str) -> bool {
+        if pid == 0 || pid == 4 {
+            return true;
+        }
+
         if let Some(meta) = self.proc_cache.lock().get(&pid) {
-            if meta.ts.elapsed() <= Duration::from_secs(60) && meta.is_trusted_signed {
-                return true;
+            if meta.ts.elapsed() <= Duration::from_secs(60) {
+                return meta.is_trusted_signed;
             }
         }
-        self.is_legacy_allowlisted_process_name(proc_path)
+
+        let (is_trusted, signer_subject) = self.trust_for_image(proc_path);
+
+        self.proc_cache.lock().insert(
+            pid,
+            ProcMeta {
+                image: proc_path.to_string(),
+                ts: Instant::now(),
+                is_trusted_signed: is_trusted,
+                signer_subject,
+            },
+        );
+
+        is_trusted
     }
 
     #[inline]
@@ -179,19 +214,37 @@ impl Engine {
         if file_object == 0 || pid == 0 || pid == 4 {
             return;
         }
-        self.whitelisted_file_objects
-            .lock()
+        let now = Instant::now();
+        let mut wl = self.whitelisted_file_objects.lock();
+
+        if wl.len() > WHITELIST_MAX {
+            wl.retain(|_, v| now.duration_since(v.last_seen) <= WHITELIST_TTL);
+        }
+
+        let entry = wl
             .entry(file_object)
-            .or_default()
-            .insert(pid);
+            .or_insert_with(|| WhitelistedFileObject {
+                owners: HashSet::new(),
+                last_seen: now,
+            });
+        entry.owners.insert(pid);
+        entry.last_seen = now;
     }
 
     #[inline]
     pub fn whitelisted_file_object_owner(&self, file_object: u64) -> Option<HashSet<u32>> {
-        self.whitelisted_file_objects
-            .lock()
-            .get(&file_object)
-            .cloned()
+        let now = Instant::now();
+        let mut wl = self.whitelisted_file_objects.lock();
+        let Some(entry) = wl.get(&file_object) else {
+            return None;
+        };
+
+        if now.duration_since(entry.last_seen) > WHITELIST_TTL {
+            wl.remove(&file_object);
+            return None;
+        }
+
+        Some(entry.owners.clone())
     }
 
     fn dedupe_key(pid: u32, target: &str) -> u64 {
@@ -281,5 +334,20 @@ impl Engine {
             is_trusted: true,
             signer_subject: trust.signer_subject,
         }
+    }
+
+    #[inline]
+    fn trust_for_image(&self, path: &str) -> (bool, Option<String>) {
+        if path == "unknown" || path == "SYSTEM" || path.is_empty() {
+            return (false, None);
+        }
+
+        let trust = self.trust_for_path(path);
+        let is_trusted = trust.is_trusted;
+        let signer_subject = trust.signer_subject;
+
+        let is_trusted = is_trusted || self.is_legacy_allowlisted_process_name(path);
+
+        (is_trusted, signer_subject)
     }
 }

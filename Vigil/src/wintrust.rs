@@ -43,9 +43,9 @@ fn extract_signer_subject(path: &str) -> Option<String> {
 
         let mut store: HCERTSTORE = HCERTSTORE::default();
         let mut msg: *mut c_void = null_mut();
-        
+
         let pv_object = wide.as_ptr() as *const c_void;
-        
+
         let store_out: *mut HCERTSTORE = &mut store;
         let msg_out: *mut *mut c_void = &mut msg;
 
@@ -62,7 +62,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
             Some(msg_out),
             None,
         )
-            .is_err()
+        .is_err()
         {
             return None;
         }
@@ -80,7 +80,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
             None,
             &mut signer_info_size,
         )
-            .is_err()
+        .is_err()
             || signer_info_size == 0
         {
             let _ = CryptMsgClose(Some(msg as *const c_void));
@@ -89,7 +89,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         }
 
         let mut buf = vec![0u8; signer_info_size as usize];
-        
+
         if CryptMsgGetParam(
             msg as *const c_void,
             CMSG_SIGNER_INFO_PARAM,
@@ -97,7 +97,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
             Some(buf.as_mut_ptr() as *mut c_void),
             &mut signer_info_size,
         )
-            .is_err()
+        .is_err()
         {
             let _ = CryptMsgClose(Some(msg as *const c_void));
             let _ = CertCloseStore(Some(store), 0);
@@ -105,12 +105,12 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         }
 
         let signer_info = &*(buf.as_ptr() as *const CMSG_SIGNER_INFO);
-        
+
         let mut cert_info = CERT_INFO::default();
-        
+
         cert_info.Issuer = signer_info.Issuer.clone();
         cert_info.SerialNumber = signer_info.SerialNumber.clone();
-        
+
         let cert_ctx = CertFindCertificateInStore(
             store,
             X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
@@ -125,7 +125,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
             let _ = CertCloseStore(Some(store), 0);
             return None;
         }
-        
+
         let needed = CertGetNameStringW(cert_ctx, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, None);
 
         if needed <= 1 {
@@ -172,7 +172,7 @@ pub fn verify_file_signature(path: &str) -> TrustResult {
         };
 
         let mut data = WINTRUST_DATA::default();
-        
+
         data.cbStruct = size_of::<WINTRUST_DATA>() as u32;
         data.dwUIChoice = WTD_UI_NONE;
         data.fdwRevocationChecks = WTD_REVOKE_NONE;
@@ -187,7 +187,7 @@ pub fn verify_file_signature(path: &str) -> TrustResult {
             &mut action as *mut _,
             &mut data as *mut _ as *mut c_void,
         );
-        
+
         data.dwStateAction = WTD_STATEACTION_CLOSE;
         let _ = WinVerifyTrust(
             HWND(std::ptr::null_mut()),

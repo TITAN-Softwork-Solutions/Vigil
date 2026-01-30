@@ -16,24 +16,32 @@ use windows::{
 };
 
 pub fn enum_process_ids() -> Result<Vec<u32>> {
-    let mut buf = vec![0u32; 4096];
-    let mut bytes_returned: u32 = 0;
+    let mut cap = 4096usize;
+    loop {
+        let mut buf = vec![0u32; cap];
+        let mut bytes_returned: u32 = 0;
 
-    unsafe {
-        if EnumProcesses(
-            buf.as_mut_ptr(),
-            (buf.len() * size_of::<u32>()) as u32,
-            &mut bytes_returned,
-        )
+        unsafe {
+            if EnumProcesses(
+                buf.as_mut_ptr(),
+                (buf.len() * size_of::<u32>()) as u32,
+                &mut bytes_returned,
+            )
             .is_err()
-        {
-            anyhow::bail!("EnumProcesses failed");
+            {
+                anyhow::bail!("EnumProcesses failed");
+            }
         }
-    }
 
-    let count = (bytes_returned as usize) / size_of::<u32>();
-    buf.truncate(count);
-    Ok(buf)
+        let count = (bytes_returned as usize) / size_of::<u32>();
+        if bytes_returned as usize >= buf.len() * size_of::<u32>() {
+            cap = cap.saturating_mul(2);
+            continue;
+        }
+
+        buf.truncate(count);
+        return Ok(buf);
+    }
 }
 
 pub fn get_process_image_path(pid: u32) -> Option<String> {
@@ -53,7 +61,7 @@ pub fn get_process_image_path(pid: u32) -> Option<String> {
             PWSTR(buf.as_mut_ptr()),
             &mut size,
         )
-            .is_ok();
+        .is_ok();
 
         let _ = CloseHandle(h);
 
