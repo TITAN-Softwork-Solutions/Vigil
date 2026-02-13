@@ -13,7 +13,7 @@ impl Cli {
         let mut config_explicit = false;
         let mut verbose = false;
 
-        let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+        let args = std::env::args().skip(1).collect::<Vec<_>>();
 
         let mut i = 0;
         while i < args.len() {

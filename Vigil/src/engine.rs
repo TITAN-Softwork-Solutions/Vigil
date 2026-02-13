@@ -1,9 +1,12 @@
-use crate::{alerts::Alert, config::Config, handles, process, wintrust};
+use crate::{
+    alerts::Alert,
+    config::{Config, RevocationMode},
+    handles, process, wintrust,
+};
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use std::{
-    collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -15,13 +18,14 @@ pub struct ProcMeta {
     pub image: String,
     pub ts: Instant,
     pub is_trusted_signed: bool,
-    pub signer_subject: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct Engine {
     cfg: Config,
     alert_tx: Sender<Alert>,
+    protected_exact_rules: BTreeMap<String, String>,
+    protected_substring_rules: BTreeMap<String, String>,
     proc_cache: Mutex<HashMap<u32, ProcMeta>>,
     filekey_cache: Mutex<HashMap<u64, String>>,
     last_alert: Mutex<HashMap<u64, Instant>>,
@@ -36,9 +40,21 @@ struct WhitelistedFileObject {
 
 impl Engine {
     pub fn new(cfg: Config, alert_tx: Sender<Alert>) -> Self {
+        let mut protected_exact_rules = BTreeMap::new();
+        for rule in &cfg.watch.exact_paths {
+            protected_exact_rules.insert(rule.substring.clone(), rule.name.clone());
+        }
+
+        let mut protected_substring_rules = BTreeMap::new();
+        for rule in &cfg.watch.protected {
+            protected_substring_rules.insert(rule.substring.clone(), rule.name.clone());
+        }
+
         Self {
             cfg,
             alert_tx,
+            protected_exact_rules,
+            protected_substring_rules,
             proc_cache: Mutex::new(HashMap::new()),
             filekey_cache: Mutex::new(HashMap::new()),
             last_alert: Mutex::new(HashMap::new()),
@@ -64,7 +80,6 @@ impl Engine {
                         image: img.clone(),
                         ts: Instant::now(),
                         is_trusted_signed: true,
-                        signer_subject: trust.signer_subject.clone(),
                     },
                 );
                 trusted_pids.push(pid);
@@ -103,7 +118,7 @@ impl Engine {
             return;
         }
 
-        let (is_trusted, signer_subject) = self.trust_for_image(&image);
+        let (is_trusted, _) = self.trust_for_image(&image);
 
         self.proc_cache.lock().insert(
             pid,
@@ -111,7 +126,6 @@ impl Engine {
                 image,
                 ts: Instant::now(),
                 is_trusted_signed: is_trusted,
-                signer_subject,
             },
         );
     }
@@ -146,7 +160,7 @@ impl Engine {
         }
 
         let img = process::get_process_image_path(pid).unwrap_or_else(|| "unknown".to_string());
-        let (is_trusted, signer_subject) = self.trust_for_image(&img);
+        let (is_trusted, _) = self.trust_for_image(&img);
 
         self.proc_cache.lock().insert(
             pid,
@@ -154,7 +168,6 @@ impl Engine {
                 image: img.clone(),
                 ts: Instant::now(),
                 is_trusted_signed: is_trusted,
-                signer_subject,
             },
         );
 
@@ -164,9 +177,13 @@ impl Engine {
     #[inline]
     pub fn match_protected_rule(&self, path: &str) -> Option<(String, String)> {
         let p = path.to_lowercase();
-        for rule in &self.cfg.watch.protected {
-            if p.contains(&rule.substring) {
-                return Some((rule.name.clone(), rule.substring.clone()));
+        if let Some(name) = self.protected_exact_rules.get(&p) {
+            return Some((name.clone(), p));
+        }
+
+        for (needle, name) in &self.protected_substring_rules {
+            if p.contains(needle) {
+                return Some((name.clone(), needle.clone()));
             }
         }
         None
@@ -194,7 +211,7 @@ impl Engine {
             }
         }
 
-        let (is_trusted, signer_subject) = self.trust_for_image(proc_path);
+        let (is_trusted, _) = self.trust_for_image(proc_path);
 
         self.proc_cache.lock().insert(
             pid,
@@ -202,7 +219,6 @@ impl Engine {
                 image: proc_path.to_string(),
                 ts: Instant::now(),
                 is_trusted_signed: is_trusted,
-                signer_subject,
             },
         );
 
@@ -248,11 +264,16 @@ impl Engine {
     }
 
     fn dedupe_key(pid: u32, target: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        let mut h = DefaultHasher::new();
-        pid.hash(&mut h);
-        target.hash(&mut h);
-        h.finish()
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for b in pid.to_le_bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        for b in target.as_bytes() {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
     }
 
     #[inline]
@@ -298,17 +319,37 @@ impl Engine {
 
     #[inline]
     fn trust_for_path(&self, path: &str) -> wintrust::TrustResult {
-        let trust = wintrust::verify_file_signature(path);
+        let trust = wintrust::verify_file_signature(path, self.revocation_policy());
 
-        if !trust.is_signed {
+        if self.cfg.security.require_signature && !trust.is_signed {
             return wintrust::TrustResult {
                 is_signed: false,
                 is_trusted: false,
                 signer_subject: None,
+                signer_thumbprint: None,
             };
         }
 
-        if !self.cfg.allowlist.signer_subject_allow.is_empty() {
+        if let Some(thumbprint) = &trust.signer_thumbprint {
+            let is_denylisted = self
+                .cfg
+                .security
+                .denylisted_cert_thumbprints
+                .iter()
+                .any(|blocked| blocked == thumbprint);
+            if is_denylisted {
+                return wintrust::TrustResult {
+                    is_signed: trust.is_signed,
+                    is_trusted: false,
+                    signer_subject: trust.signer_subject,
+                    signer_thumbprint: trust.signer_thumbprint,
+                };
+            }
+        }
+
+        if !self.cfg.allowlist.signer_subject_allow.is_empty()
+            && self.cfg.security.require_signer_allowlist
+        {
             let subj = trust
                 .signer_subject
                 .clone()
@@ -323,16 +364,18 @@ impl Engine {
                 .any(|needle| subj.contains(needle));
 
             return wintrust::TrustResult {
-                is_signed: true,
-                is_trusted: ok,
+                is_signed: trust.is_signed,
+                is_trusted: ok && trust.is_trusted,
                 signer_subject: trust.signer_subject,
+                signer_thumbprint: trust.signer_thumbprint,
             };
         }
 
         wintrust::TrustResult {
-            is_signed: true,
-            is_trusted: true,
+            is_signed: trust.is_signed,
+            is_trusted: trust.is_trusted,
             signer_subject: trust.signer_subject,
+            signer_thumbprint: trust.signer_thumbprint,
         }
     }
 
@@ -346,8 +389,19 @@ impl Engine {
         let is_trusted = trust.is_trusted;
         let signer_subject = trust.signer_subject;
 
-        let is_trusted = is_trusted || self.is_legacy_allowlisted_process_name(path);
+        let is_trusted = if self.cfg.security.allow_legacy_process_name_fallback {
+            is_trusted || self.is_legacy_allowlisted_process_name(path)
+        } else {
+            is_trusted
+        };
 
         (is_trusted, signer_subject)
+    }
+
+    fn revocation_policy(&self) -> wintrust::RevocationPolicy {
+        match self.cfg.security.revocation_mode {
+            RevocationMode::None => wintrust::RevocationPolicy::None,
+            RevocationMode::Chain => wintrust::RevocationPolicy::WholeChain,
+        }
     }
 }

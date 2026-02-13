@@ -1,12 +1,29 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub general: GeneralConfig,
+
+    #[serde(default)]
     pub watch: WatchConfig,
+
+    #[serde(default)]
     pub allowlist: AllowlistConfig,
+
+    #[serde(default)]
+    pub security: SecurityConfig,
+
+    #[serde(default)]
+    pub concurrency: ConcurrencyConfig,
+
+    #[serde(default)]
+    pub endpoint_alert: EndpointAlertConfig,
+
+    #[serde(default)]
+    pub siem: SiemConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +51,9 @@ pub struct WatchConfig {
 
     #[serde(default)]
     pub protected_substrings: Vec<String>,
+
+    #[serde(default)]
+    pub exact_paths: Vec<ProtectedRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +65,82 @@ pub struct AllowlistConfig {
     pub process_name_allow: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RevocationMode {
+    #[default]
+    None,
+    Chain,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    #[serde(default = "default_require_signature")]
+    pub require_signature: bool,
+
+    #[serde(default = "default_require_signer_allowlist")]
+    pub require_signer_allowlist: bool,
+
+    #[serde(default)]
+    pub allow_legacy_process_name_fallback: bool,
+
+    #[serde(default)]
+    pub revocation_mode: RevocationMode,
+
+    #[serde(default)]
+    pub denylisted_cert_thumbprints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConcurrencyConfig {
+    #[serde(default = "default_worker_threads")]
+    pub worker_threads: usize,
+
+    #[serde(default = "default_alert_channel_capacity")]
+    pub alert_channel_capacity: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointTransport {
+    #[default]
+    Udp,
+    Tcp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointAlertConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub endpoint: String,
+
+    #[serde(default)]
+    pub transport: EndpointTransport,
+
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+
+    #[serde(default = "default_endpoint_retries")]
+    pub retries: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiemConfig {
+    #[serde(default = "default_siem_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_siem_formats")]
+    pub formats: Vec<String>,
+
+    #[serde(default = "default_generate_sigma_rules")]
+    pub generate_sigma_rules: bool,
+
+    #[serde(default = "default_sigma_rules_file")]
+    pub sigma_rules_file: String,
+}
+
 fn default_quiet() -> bool {
     true
 }
@@ -53,6 +149,111 @@ fn default_jsonl() -> bool {
 }
 fn default_suppress_ms() -> u64 {
     1500
+}
+fn default_require_signature() -> bool {
+    true
+}
+fn default_require_signer_allowlist() -> bool {
+    true
+}
+fn default_worker_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().max(2))
+        .unwrap_or(4)
+}
+fn default_alert_channel_capacity() -> usize {
+    4096
+}
+fn default_connect_timeout_ms() -> u64 {
+    1500
+}
+fn default_endpoint_retries() -> usize {
+    1
+}
+fn default_siem_enabled() -> bool {
+    true
+}
+fn default_siem_formats() -> Vec<String> {
+    vec!["jsonl".to_string(), "cef".to_string(), "sigma_json".to_string()]
+}
+fn default_generate_sigma_rules() -> bool {
+    true
+}
+fn default_sigma_rules_file() -> String {
+    "sigma_rules.yml".to_string()
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            quiet: default_quiet(),
+            jsonl: default_jsonl(),
+            suppress_ms: default_suppress_ms(),
+        }
+    }
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        Self {
+            protected: Vec::new(),
+            protected_substrings: Vec::new(),
+            exact_paths: Vec::new(),
+        }
+    }
+}
+
+impl Default for AllowlistConfig {
+    fn default() -> Self {
+        Self {
+            signer_subject_allow: Vec::new(),
+            process_name_allow: Vec::new(),
+        }
+    }
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            require_signature: default_require_signature(),
+            require_signer_allowlist: default_require_signer_allowlist(),
+            allow_legacy_process_name_fallback: false,
+            revocation_mode: RevocationMode::None,
+            denylisted_cert_thumbprints: Vec::new(),
+        }
+    }
+}
+
+impl Default for ConcurrencyConfig {
+    fn default() -> Self {
+        Self {
+            worker_threads: default_worker_threads(),
+            alert_channel_capacity: default_alert_channel_capacity(),
+        }
+    }
+}
+
+impl Default for EndpointAlertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: String::new(),
+            transport: EndpointTransport::Udp,
+            connect_timeout_ms: default_connect_timeout_ms(),
+            retries: default_endpoint_retries(),
+        }
+    }
+}
+
+impl Default for SiemConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_siem_enabled(),
+            formats: default_siem_formats(),
+            generate_sigma_rules: default_generate_sigma_rules(),
+            sigma_rules_file: default_sigma_rules_file(),
+        }
+    }
 }
 
 impl Config {
@@ -63,6 +264,9 @@ impl Config {
         let mut cfg: Config = toml::from_str(&text).context("failed to parse config.toml")?;
 
         for rule in &mut cfg.watch.protected {
+            rule.substring = rule.substring.to_lowercase();
+        }
+        for rule in &mut cfg.watch.exact_paths {
             rule.substring = rule.substring.to_lowercase();
         }
 
@@ -87,6 +291,14 @@ impl Config {
             .map(|s| s.to_lowercase())
             .collect();
 
+        cfg.security.denylisted_cert_thumbprints = cfg
+            .security
+            .denylisted_cert_thumbprints
+            .into_iter()
+            .map(normalize_thumbprint)
+            .filter(|s| !s.is_empty())
+            .collect();
+
         if cfg.watch.protected.is_empty() && !cfg.watch.protected_substrings.is_empty() {
             cfg.watch.protected = cfg
                 .watch
@@ -99,6 +311,50 @@ impl Config {
                 .collect();
         }
 
+        if cfg.concurrency.worker_threads == 0 {
+            cfg.concurrency.worker_threads = default_worker_threads();
+        }
+        if cfg.concurrency.alert_channel_capacity == 0 {
+            cfg.concurrency.alert_channel_capacity = default_alert_channel_capacity();
+        }
+
+        if cfg.endpoint_alert.enabled && cfg.endpoint_alert.endpoint.trim().is_empty() {
+            anyhow::bail!("endpoint_alert.enabled=true but endpoint_alert.endpoint is empty");
+        }
+
+        cfg.siem.formats = cfg
+            .siem
+            .formats
+            .into_iter()
+            .map(|v| v.trim().to_lowercase())
+            .filter(|v| !v.is_empty())
+            .collect();
+        if cfg.siem.formats.is_empty() {
+            cfg.siem.formats = default_siem_formats();
+        }
+        validate_siem_formats(&cfg.siem.formats)?;
+
         Ok(cfg)
     }
+}
+
+fn normalize_thumbprint(value: String) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_uppercase()
+}
+
+fn validate_siem_formats(formats: &[String]) -> Result<()> {
+    let allowed: HashSet<&str> = ["jsonl", "text", "cef", "sigma_json"].into_iter().collect();
+    for fmt in formats {
+        if !allowed.contains(fmt.as_str()) {
+            anyhow::bail!(
+                "unknown siem format '{}' (allowed: jsonl, text, cef, sigma_json)",
+                fmt
+            );
+        }
+    }
+    Ok(())
 }
