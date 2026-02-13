@@ -1,25 +1,26 @@
 use std::{ffi::c_void, mem::size_of, ptr::null_mut};
 
 use windows::{
-    core::PCWSTR,
     Win32::{
         Foundation::{ERROR_SUCCESS, HWND},
         Security::{
             Cryptography::{
-                CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext,
-                CertGetCertificateContextProperty, CertGetNameStringW, CryptMsgClose,
-                CryptMsgGetParam, CryptQueryObject, CERT_FIND_SUBJECT_CERT, CERT_INFO,
-                CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
-                CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, HCERTSTORE, PKCS_7_ASN_ENCODING,
-                X509_ASN_ENCODING, CERT_SHA1_HASH_PROP_ID,
+                CERT_FIND_SUBJECT_CERT, CERT_INFO, CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
+                CERT_QUERY_OBJECT_FILE, CERT_SHA1_HASH_PROP_ID, CMSG_SIGNER_INFO,
+                CMSG_SIGNER_INFO_PARAM, CertCloseStore, CertFindCertificateInStore,
+                CertFreeCertificateContext, CertGetCertificateContextProperty, CertGetNameStringW,
+                CryptMsgClose, CryptMsgGetParam, CryptQueryObject, HCERTSTORE, PKCS_7_ASN_ENCODING,
+                X509_ASN_ENCODING,
             },
             WinTrust::{
-                WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA,
-                WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE,
-                WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+                WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_FILE_INFO,
+                WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE,
+                WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
             },
         },
     },
+    core::PCWSTR,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

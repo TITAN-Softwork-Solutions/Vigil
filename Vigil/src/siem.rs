@@ -11,7 +11,11 @@ pub fn generate_sigma_rules(cfg: &Config, log_dir: &Path) -> Result<Option<PathB
     }
 
     let out = PathBuf::from(&cfg.siem.sigma_rules_file);
-    let output_path = if out.is_absolute() { out } else { log_dir.join(out) };
+    let output_path = if out.is_absolute() {
+        out
+    } else {
+        log_dir.join(out)
+    };
 
     let mut content = String::new();
     for rule in &cfg.watch.protected {
@@ -26,7 +30,10 @@ pub fn generate_sigma_rules(cfg: &Config, log_dir: &Path) -> Result<Option<PathB
         content.push_str("  category: file_access\n");
         content.push_str("detection:\n");
         content.push_str("  selection:\n");
-        content.push_str(&format!("    data_name: '{}'\n", escape_single_quotes(&rule.name)));
+        content.push_str(&format!(
+            "    data_name: '{}'\n",
+            escape_single_quotes(&rule.name)
+        ));
         content.push_str(&format!(
             "    target|contains: '{}'\n",
             escape_single_quotes(&rule.substring)

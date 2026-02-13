@@ -256,3 +256,108 @@ fn open_append_file(path: &Path) -> Result<File> {
         .open(path)
         .with_context(|| format!("open failed: {}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        AllowlistConfig, ConcurrencyConfig, EndpointAlertConfig, GeneralConfig, SecurityConfig,
+        SiemConfig, WatchConfig,
+    };
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn test_cfg_with_formats(formats: Vec<String>) -> Config {
+        Config {
+            general: GeneralConfig {
+                quiet: true,
+                jsonl: true,
+                suppress_ms: 1500,
+            },
+            watch: WatchConfig::default(),
+            allowlist: AllowlistConfig::default(),
+            security: SecurityConfig::default(),
+            concurrency: ConcurrencyConfig::default(),
+            endpoint_alert: EndpointAlertConfig::default(),
+            siem: SiemConfig {
+                enabled: true,
+                formats,
+                generate_sigma_rules: false,
+                sigma_rules_file: "sigma_rules.yml".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn cef_line_escapes_special_chars() {
+        let alert = Alert::new(
+            10,
+            r"C:\proc|name.exe".to_string(),
+            r"C:\target=a\file".to_string(),
+            "Name|Eq=Test".to_string(),
+            12,
+            "protected_resource_access",
+            "line1\nline2",
+        );
+
+        let cef = alert.cef_line();
+        assert!(cef.starts_with("CEF:0|TITAN|Vigil|1.0|12|"));
+        assert!(cef.contains(r"Name\|Eq\=Test"));
+        assert!(cef.contains(r"filePath=C:\\target\=a\\file"));
+        assert!(cef.contains("msg=line1 line2"));
+    }
+
+    #[test]
+    fn sigma_json_contains_expected_fields() {
+        let alert = Alert::new(
+            20,
+            "proc.exe".to_string(),
+            "target".to_string(),
+            "Cookie Vault".to_string(),
+            12,
+            "protected_resource_access",
+            "note",
+        );
+        let sigma = alert.sigma_json();
+        assert_eq!(sigma["logsource"]["product"], "windows");
+        assert_eq!(sigma["detection"]["pid"], 20);
+        assert_eq!(sigma["detection"]["rule_name"], "Cookie Vault");
+        assert!(
+            sigma["tags"]
+                .as_array()
+                .expect("tags should be array")
+                .iter()
+                .any(|v| v == "attack.collection")
+        );
+    }
+
+    #[test]
+    fn logger_writes_configured_sink_files() {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let log_dir = std::env::temp_dir().join(format!("titan-vigil-alert-tests-{ts}"));
+        fs::create_dir_all(&log_dir).expect("failed to create temp log dir");
+
+        let cfg = test_cfg_with_formats(vec!["jsonl".to_string(), "cef".to_string()]);
+        let logger = AlertLogger::new(&log_dir, &cfg).expect("logger init");
+        let alert = Alert::new(
+            99,
+            "proc.exe".to_string(),
+            "target".to_string(),
+            "Data".to_string(),
+            12,
+            "protected_resource_access",
+            "note",
+        );
+        logger.write(&alert).expect("logger write");
+
+        assert!(log_dir.join("alerts.jsonl").exists());
+        assert!(log_dir.join("alerts.cef").exists());
+
+        let _ = fs::remove_dir_all(&log_dir);
+    }
+}
