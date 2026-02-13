@@ -1,17 +1,62 @@
 [general]
-# Set false to show the "[TML] running ..." banner
+# Set false to show startup banners.
 quiet = false
 
-# Write alerts as JSONL to %LOCALAPPDATA%\TITAN-Mercenary-Lite\logs\alerts.jsonl
+# Legacy fallback used when SIEM mode is disabled.
 jsonl = true
 
-# Dedupe repeated alerts per (pid + target) for this many ms
+# Dedupe repeated alerts per (pid + target) for this many ms.
 suppress_ms = 1500
 
+[security]
+# Require an Authenticode signature before trust can be granted.
+require_signature = true
+
+# If true, signer subject must match allowlist.signer_subject_allow.
+require_signer_allowlist = true
+
+# Optional fallback by process-name suffix (not recommended).
+allow_legacy_process_name_fallback = false
+
+# "none" or "chain" (revocation checks).
+revocation_mode = "chain"
+
+# Block known stolen/compromised signer certificates by SHA1 thumbprint.
+denylisted_cert_thumbprints = [
+    # "ABCD1234..."
+]
+
+[concurrency]
+# Worker threads for logging/sinks/endpoint forwarding.
+worker_threads = 4
+
+# Backpressure for event bursts.
+alert_channel_capacity = 8192
+
+[endpoint_alert]
+# Optional external forwarding for EDR backends.
+enabled = false
+
+# Endpoint address in host:port format.
+endpoint = "127.0.0.1:9000"
+
+# "udp" or "tcp"
+transport = "udp"
+
+connect_timeout_ms = 1500
+retries = 2
+
+[siem]
+enabled = true
+
+# Allowed values: jsonl, text, cef, sigma_json
+formats = ["jsonl", "cef", "sigma_json"]
+
+generate_sigma_rules = true
+sigma_rules_file = "sigma_rules.yml"
 
 [allowlist]
-# Strong allowlist: must be Authenticode signed AND signer subject contains one of these strings.
-# (Case-insensitive)
+# Signer subject fragments (case-insensitive).
 signer_subject_allow = [
     "Microsoft Corporation",
     "Google LLC",
@@ -21,8 +66,7 @@ signer_subject_allow = [
     "Discord Inc"
 ]
 
-# Optional legacy fallback allowlist by process name suffix (NOT RECOMMENDED)
-# Only enable if you really need it.
+# Optional legacy fallback allowlist by process name suffix.
 process_name_allow = [
     "chrome.exe",
     "msedge.exe",
@@ -32,11 +76,9 @@ process_name_allow = [
     "discord.exe"
 ]
 
-
 [watch]
-# You can define named protected rules like this:
-# substring = lowercased matching pattern
-# name = what shows in toast/logs
+# Exact full-path match rules (already normalized to lowercase at load time).
+exact_paths = []
 
 [[watch.protected]]
 substring = "\\google\\chrome\\user data\\default\\login data"
@@ -47,11 +89,11 @@ substring = "\\google\\chrome\\user data\\default\\network\\cookies"
 name = "Chrome Cookies"
 
 [[watch.protected]]
-substring = "\\braveSoftware\\brave-browser\\user data\\default\\login data"
+substring = "\\bravesoftware\\brave-browser\\user data\\default\\login data"
 name = "Brave Passwords"
 
 [[watch.protected]]
-substring = "\\braveSoftware\\brave-browser\\user data\\default\\network\\cookies"
+substring = "\\bravesoftware\\brave-browser\\user data\\default\\network\\cookies"
 name = "Brave Cookies"
 
 [[watch.protected]]

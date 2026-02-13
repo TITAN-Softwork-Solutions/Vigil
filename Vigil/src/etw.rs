@@ -1,4 +1,4 @@
-use crate::engine::Engine;
+use crate::{diag, engine::Engine};
 use anyhow::{anyhow, Result};
 use std::{
     ffi::c_void,
@@ -19,7 +19,7 @@ use windows::{
             ProcessTrace, StartTraceW, TdhGetProperty, TdhGetPropertySize,
             CONTROLTRACE_HANDLE, EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD,
             EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_LOGFILEW,
-            EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE, PROCESSTRACE_HANDLE,
+            EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE,
             PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_RAW_TIMESTAMP, PROCESS_TRACE_MODE_REAL_TIME, PROPERTY_DATA_DESCRIPTOR, TRACE_LEVEL_VERBOSE,
             WNODE_FLAG_TRACED_GUID,
         },
@@ -39,8 +39,6 @@ struct CallbackCtx {
 
 pub struct EtwSession {
     trace_name: Vec<u16>,
-    control_handle: CONTROLTRACE_HANDLE,
-    trace_handle: PROCESSTRACE_HANDLE,
     join: Option<std::thread::JoinHandle<()>>,
     _ctx: Box<CallbackCtx>,
 }
@@ -55,26 +53,98 @@ impl Drop for EtwSession {
 }
 
 pub fn start_etw(engine: Arc<Engine>) -> Result<EtwSession> {
-    for attempt in 0..2 {
-        match start_trace(engine.clone()) {
-            Ok(session) => return Ok(session),
-            Err(e) => {
-                let msg = format!("{e:?}");
-                eprintln!("[ETW] start failed (attempt {}): {}", attempt + 1, msg);
-                if msg.contains("already exists") && attempt == 0 {
-                    let _ = stop_trace_by_name(&to_wide(TRACE_NAME));
-                    thread::sleep(Duration::from_millis(150));
-                    continue;
+    diag::startup("ETW start requested");
+    let cleanup_result = cleanup_existing_vigil_session();
+    if let Err(e) = &cleanup_result {
+        diag::startup(&format!("ETW pre-clean failed for '{TRACE_NAME}': {e}"));
+        eprintln!("[ETW] pre-clean failed for '{TRACE_NAME}': {e}");
+    } else {
+        diag::startup(&format!("ETW pre-clean completed for '{TRACE_NAME}'"));
+    }
+
+    let names = candidate_trace_names();
+    let mut last_err: Option<anyhow::Error> = None;
+
+    for (idx, name) in names.iter().enumerate() {
+        if idx > 0 {
+            diag::startup(&format!("ETW trying fallback session name '{name}'"));
+            eprintln!("[ETW] trying fallback session name '{name}'");
+        }
+
+        for attempt in 0..2 {
+            match start_trace_with_name(engine.clone(), name) {
+                Ok(session) => {
+                    diag::startup(&format!("ETW session started with name '{name}'"));
+                    return Ok(session);
                 }
-                return Err(e);
+                Err(e) => {
+                    let msg = format!("{e:?}");
+                    diag::startup(&format!(
+                        "ETW start failed for '{}' (attempt {}): {}",
+                        name,
+                        attempt + 1,
+                        msg
+                    ));
+                    eprintln!(
+                        "[ETW] start failed for '{}' (attempt {}): {}",
+                        name,
+                        attempt + 1,
+                        msg
+                    );
+                    if msg.contains("already exists") && attempt == 0 {
+                        let _ = stop_trace_by_name(&to_wide(name));
+                        thread::sleep(Duration::from_millis(150));
+                        continue;
+                    }
+                    last_err = Some(e);
+                    break;
+                }
             }
         }
     }
+
+    if let Some(e) = cleanup_result.err() {
+        if let Some(last) = last_err {
+            return Err(anyhow!(
+                "failed to start ETW session; cleanup error: {e}; last start error: {last}"
+            ));
+        }
+        return Err(anyhow!("failed to start ETW session; cleanup error: {e}"));
+    }
+
+    if let Some(last) = last_err {
+        return Err(anyhow!("failed to start ETW session: {last}"));
+    }
+
     Err(anyhow!("failed to start ETW session"))
 }
 
-fn start_trace(engine: Arc<Engine>) -> Result<EtwSession> {
+fn cleanup_existing_vigil_session() -> Result<()> {
     let trace_name = to_wide(TRACE_NAME);
+    match stop_trace_by_name(&trace_name) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let msg = e.to_string().to_lowercase();
+            if msg.contains("not found") {
+                Ok(())
+            } else {
+                Err(anyhow!("failed to clean up existing ETW session: {e}"))
+            }
+        }
+    }
+}
+
+fn candidate_trace_names() -> Vec<String> {
+    let pid = std::process::id();
+    vec![
+        TRACE_NAME.to_string(),
+        format!("{TRACE_NAME}-{pid}"),
+        format!("{TRACE_NAME}-{pid}-fallback"),
+    ]
+}
+
+fn start_trace_with_name(engine: Arc<Engine>, session_name: &str) -> Result<EtwSession> {
+    let trace_name = to_wide(session_name);
     let (_props_buf, props_ptr) = build_properties(&trace_name);
 
     let mut control_handle = CONTROLTRACE_HANDLE::default();
@@ -82,12 +152,9 @@ fn start_trace(engine: Arc<Engine>) -> Result<EtwSession> {
         unsafe { StartTraceW(&mut control_handle, PCWSTR(trace_name.as_ptr()), props_ptr) };
     if status != ERROR_SUCCESS {
         if status == ERROR_ALREADY_EXISTS {
-            return Err(anyhow!("ETW session already exists"));
+            return Err(anyhow!("ETW session already exists for '{}'", session_name));
         }
-        if status == ERROR_ACCESS_DENIED {
-            return Err(anyhow!("StartTraceW failed: access denied (run as administrator)"));
-        }
-        return Err(anyhow!("StartTraceW failed: {}", status.0));
+        return Err(anyhow!("{}", format_win32_error("StartTraceW", status.0)));
     }
 
     if let Err(e) = enable_provider(control_handle, &KERNEL_PROCESS_GUID) {
@@ -106,15 +173,13 @@ fn start_trace(engine: Arc<Engine>) -> Result<EtwSession> {
         | PROCESS_TRACE_MODE_REAL_TIME
         | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
     logfile.Context = (&*ctx as *const CallbackCtx) as *mut c_void;
-    unsafe {
-        logfile.Anonymous2.EventRecordCallback = Some(event_record_callback);
-    }
+    logfile.Anonymous2.EventRecordCallback = Some(event_record_callback);
 
     let trace_handle = unsafe { OpenTraceW(&mut logfile) };
     if trace_handle.Value == INVALID_TRACE_HANDLE {
         let _ = stop_trace_by_name(&trace_name);
         let last = unsafe { GetLastError() };
-        return Err(anyhow!("OpenTraceW failed: {}", last.0));
+        return Err(anyhow!("{}", format_win32_error("OpenTraceW", last.0)));
     }
 
     let trace_handle_thread = trace_handle;
@@ -130,8 +195,6 @@ fn start_trace(engine: Arc<Engine>) -> Result<EtwSession> {
 
     Ok(EtwSession {
         trace_name,
-        control_handle,
-        trace_handle,
         join: Some(join),
         _ctx: ctx,
     })
@@ -152,10 +215,7 @@ fn enable_provider(handle: CONTROLTRACE_HANDLE, guid: &GUID) -> Result<()> {
     };
 
     if status != ERROR_SUCCESS {
-        if status == ERROR_ACCESS_DENIED {
-            return Err(anyhow!("EnableTraceEx2 failed: access denied (run as administrator)"));
-        }
-        return Err(anyhow!("EnableTraceEx2 failed: {}", status.0));
+        return Err(anyhow!("{}", format_win32_error("EnableTraceEx2", status.0)));
     }
 
     Ok(())
@@ -175,7 +235,7 @@ fn stop_trace_by_name(trace_name: &[u16]) -> Result<()> {
     if status == ERROR_SUCCESS || status == ERROR_WMI_INSTANCE_NOT_FOUND {
         Ok(())
     } else {
-        Err(anyhow!("ControlTraceW failed: {}", status.0))
+        Err(anyhow!("{}", format_win32_error("ControlTraceW", status.0)))
     }
 }
 
@@ -205,6 +265,28 @@ fn to_wide(s: &str) -> Vec<u16> {
         .encode_wide()
         .chain(Some(0))
         .collect()
+}
+
+fn format_win32_error(op: &str, code: u32) -> String {
+    let mut msg = format!("{op} failed with Win32 error {code} (0x{code:08X})");
+    if let Some(hint) = win32_hint(code) {
+        msg.push_str(": ");
+        msg.push_str(hint);
+    }
+    msg
+}
+
+fn win32_hint(code: u32) -> Option<&'static str> {
+    if code == ERROR_ACCESS_DENIED.0 {
+        return Some("access denied; run elevated and ensure EDR/tamper protection is not blocking kernel tracing");
+    }
+    if code == ERROR_ALREADY_EXISTS.0 {
+        return Some("ETW session already exists; stop it with `logman stop TITAN-Vigil -ets`");
+    }
+    if code == ERROR_WMI_INSTANCE_NOT_FOUND.0 {
+        return Some("ETW session not found");
+    }
+    None
 }
 
 unsafe extern "system" fn event_record_callback(record: *mut EVENT_RECORD) {

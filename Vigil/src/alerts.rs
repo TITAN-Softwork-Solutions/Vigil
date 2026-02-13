@@ -1,7 +1,9 @@
-use anyhow::Result;
+use crate::config::Config;
+use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -60,47 +62,197 @@ impl Alert {
             self.note
         )
     }
+
+    pub fn cef_line(&self) -> String {
+        let sev = match self.kind.as_str() {
+            "suspicious_whitelisted_handle_access" => 9,
+            "protected_resource_access" => 8,
+            _ => 6,
+        };
+        format!(
+            "CEF:0|TITAN|Vigil|1.0|{}|{}|{}|src={} suser={} msg={} filePath={} cs1Label=ruleName cs1={} cs2Label=eventKind cs2={}",
+            self.event_id,
+            sanitize_cef(&self.data_name),
+            sev,
+            self.pid,
+            sanitize_cef(&self.process),
+            sanitize_cef(&self.note),
+            sanitize_cef(&self.target),
+            sanitize_cef(&self.data_name),
+            sanitize_cef(&self.kind)
+        )
+    }
+
+    pub fn sigma_json(&self) -> serde_json::Value {
+        let mut tags = Vec::new();
+        if self.data_name.to_lowercase().contains("cookie") {
+            tags.push("attack.collection");
+        }
+        if self.data_name.to_lowercase().contains("password") {
+            tags.push("attack.credential_access");
+        }
+        serde_json::json!({
+            "ts_unix": self.ts_unix,
+            "title": "TITAN Vigil protected resource access",
+            "logsource": {
+                "product": "windows",
+                "service": "kernel-etw",
+                "category": "file_access"
+            },
+            "detection": {
+                "pid": self.pid,
+                "process": self.process,
+                "file_target": self.target,
+                "rule_name": self.data_name,
+                "event_id": self.event_id,
+                "kind": self.kind,
+            },
+            "level": "high",
+            "tags": tags,
+            "note": self.note
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LogFormat {
+    Jsonl,
+    Text,
+    Cef,
+    SigmaJson,
+}
+
+impl LogFormat {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "jsonl" => Some(Self::Jsonl),
+            "text" => Some(Self::Text),
+            "cef" => Some(Self::Cef),
+            "sigma_json" => Some(Self::SigmaJson),
+            _ => None,
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Jsonl => "alerts.jsonl",
+            Self::Text => "alerts.log",
+            Self::Cef => "alerts.cef",
+            Self::SigmaJson => "alerts_sigma.ndjson",
+        }
+    }
+}
+
+struct SinkWriter {
+    format: LogFormat,
+    writer: Mutex<BufWriter<File>>,
 }
 
 pub struct AlertLogger {
-    path: PathBuf,
-    jsonl: bool,
-    w: Mutex<BufWriter<File>>,
+    paths: BTreeMap<String, PathBuf>,
+    sinks: Vec<SinkWriter>,
 }
 
 impl AlertLogger {
-    pub fn new(log_dir: &Path, jsonl: bool) -> Result<Self> {
-        let path = if jsonl {
-            log_dir.join("alerts.jsonl")
-        } else {
-            log_dir.join("alerts.log")
-        };
+    pub fn new(log_dir: &Path, cfg: &Config) -> Result<Self> {
+        let mut requested = cfg.siem.formats.clone();
+        if !cfg.siem.enabled {
+            requested.clear();
+            if cfg.general.jsonl {
+                requested.push("jsonl".to_string());
+            } else {
+                requested.push("text".to_string());
+            }
+        }
 
-        let f = OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut paths = BTreeMap::new();
+        let mut sinks = Vec::new();
+        for value in requested {
+            let Some(format) = LogFormat::parse(&value) else {
+                continue;
+            };
+            let (path, file) = open_sink_file(log_dir, format.file_name())
+                .with_context(|| format!("failed to open log sink for format {}", value))?;
+            sinks.push(SinkWriter {
+                format,
+                writer: Mutex::new(BufWriter::new(file)),
+            });
+            paths.insert(value, path);
+        }
 
-        Ok(Self {
-            path,
-            jsonl,
-            w: Mutex::new(BufWriter::new(f)),
-        })
+        Ok(Self { paths, sinks })
     }
 
-    pub fn log_path(&self) -> &Path {
-        &self.path
+    pub fn primary_log_path(&self) -> Option<&Path> {
+        self.paths.values().next().map(|p| p.as_path())
     }
 
     pub fn write(&self, alert: &Alert) -> Result<()> {
-        let mut w = self.w.lock();
-
-        if self.jsonl {
-            serde_json::to_writer(&mut *w, alert)?;
-            w.write_all(b"\n")?;
-        } else {
-            w.write_all(alert.human_line().as_bytes())?;
-            w.write_all(b"\n")?;
+        for sink in &self.sinks {
+            let mut w = sink.writer.lock();
+            match sink.format {
+                LogFormat::Jsonl => {
+                    serde_json::to_writer(&mut *w, alert)?;
+                    w.write_all(b"\n")?;
+                }
+                LogFormat::Text => {
+                    w.write_all(alert.human_line().as_bytes())?;
+                    w.write_all(b"\n")?;
+                }
+                LogFormat::Cef => {
+                    w.write_all(alert.cef_line().as_bytes())?;
+                    w.write_all(b"\n")?;
+                }
+                LogFormat::SigmaJson => {
+                    serde_json::to_writer(&mut *w, &alert.sigma_json())?;
+                    w.write_all(b"\n")?;
+                }
+            }
+            w.flush()?;
         }
-
-        w.flush()?;
         Ok(())
     }
+}
+
+fn sanitize_cef(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('=', "\\=")
+        .replace('\n', " ")
+        .replace('\r', " ")
+}
+
+fn open_sink_file(log_dir: &Path, file_name: &str) -> Result<(PathBuf, File)> {
+    let primary = log_dir.join(file_name);
+    if let Ok(file) = open_append_file(&primary) {
+        return Ok((primary, file));
+    }
+
+    let pid = std::process::id();
+    let pid_fallback = log_dir.join(format!("{file_name}.{pid}.log"));
+    if let Ok(file) = open_append_file(&pid_fallback) {
+        return Ok((pid_fallback, file));
+    }
+
+    let temp_root = std::env::temp_dir().join("TITAN-Vigil-CE").join("logs");
+    let _ = std::fs::create_dir_all(&temp_root);
+    let temp_path = temp_root.join(file_name);
+    let file = open_append_file(&temp_path).with_context(|| {
+        format!(
+            "failed sink paths: {}, {}, {}",
+            primary.display(),
+            pid_fallback.display(),
+            temp_path.display()
+        )
+    })?;
+    Ok((temp_path, file))
+}
+
+fn open_append_file(path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("open failed: {}", path.display()))
 }

@@ -7,26 +7,33 @@ use windows::{
         Security::{
             Cryptography::{
                 CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext,
-                CertGetNameStringW, CryptMsgClose,
+                CertGetCertificateContextProperty, CertGetNameStringW, CryptMsgClose,
                 CryptMsgGetParam, CryptQueryObject, CERT_FIND_SUBJECT_CERT, CERT_INFO,
                 CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
                 CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, HCERTSTORE, PKCS_7_ASN_ENCODING,
-                X509_ASN_ENCODING,
+                X509_ASN_ENCODING, CERT_SHA1_HASH_PROP_ID,
             },
             WinTrust::{
                 WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA,
-                WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
+                WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE,
                 WTD_STATEACTION_VERIFY, WTD_UI_NONE,
             },
         },
     },
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevocationPolicy {
+    None,
+    WholeChain,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrustResult {
     pub is_signed: bool,
     pub is_trusted: bool,
     pub signer_subject: Option<String>,
+    pub signer_thumbprint: Option<String>,
 }
 
 fn to_wide(s: &str) -> Vec<u16> {
@@ -37,7 +44,15 @@ fn to_wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
-fn extract_signer_subject(path: &str) -> Option<String> {
+fn bytes_to_hex_upper(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{:02X}", b));
+    }
+    out
+}
+
+fn extract_signer_identity(path: &str) -> (Option<String>, Option<String>) {
     unsafe {
         let wide = to_wide(path);
 
@@ -64,12 +79,12 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         )
         .is_err()
         {
-            return None;
+            return (None, None);
         }
 
         if msg.is_null() {
             let _ = CertCloseStore(Some(store), 0);
-            return None;
+            return (None, None);
         }
 
         let mut signer_info_size: u32 = 0;
@@ -85,7 +100,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         {
             let _ = CryptMsgClose(Some(msg as *const c_void));
             let _ = CertCloseStore(Some(store), 0);
-            return None;
+            return (None, None);
         }
 
         let mut buf = vec![0u8; signer_info_size as usize];
@@ -101,7 +116,7 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         {
             let _ = CryptMsgClose(Some(msg as *const c_void));
             let _ = CertCloseStore(Some(store), 0);
-            return None;
+            return (None, None);
         }
 
         let signer_info = &*(buf.as_ptr() as *const CMSG_SIGNER_INFO);
@@ -123,31 +138,53 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         if cert_ctx.is_null() {
             let _ = CryptMsgClose(Some(msg as *const c_void));
             let _ = CertCloseStore(Some(store), 0);
-            return None;
+            return (None, None);
         }
 
         let needed = CertGetNameStringW(cert_ctx, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, None);
 
-        if needed <= 1 {
-            let _ = CertFreeCertificateContext(Some(cert_ctx));
-            let _ = CryptMsgClose(Some(msg as *const c_void));
-            let _ = CertCloseStore(Some(store), 0);
-            return None;
-        }
+        let subject = if needed > 1 {
+            let mut name_buf = vec![0u16; needed as usize];
+            let got = CertGetNameStringW(
+                cert_ctx,
+                CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                0,
+                None,
+                Some(&mut name_buf),
+            );
+            if got > 1 {
+                name_buf.truncate((got - 1) as usize);
+                Some(String::from_utf16_lossy(&name_buf))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-        let mut name_buf = vec![0u16; needed as usize];
-
-        let got = CertGetNameStringW(
+        let mut hash_len: u32 = 0;
+        let hash_ok = CertGetCertificateContextProperty(
             cert_ctx,
-            CERT_NAME_SIMPLE_DISPLAY_TYPE,
-            0,
+            CERT_SHA1_HASH_PROP_ID,
             None,
-            Some(&mut name_buf),
-        );
-
-        let subject = if got > 1 {
-            name_buf.truncate((got - 1) as usize);
-            Some(String::from_utf16_lossy(&name_buf))
+            &mut hash_len,
+        )
+        .is_ok();
+        let thumbprint = if hash_ok && hash_len > 0 {
+            let mut hash = vec![0u8; hash_len as usize];
+            if CertGetCertificateContextProperty(
+                cert_ctx,
+                CERT_SHA1_HASH_PROP_ID,
+                Some(hash.as_mut_ptr() as *mut c_void),
+                &mut hash_len,
+            )
+            .is_ok()
+            {
+                hash.truncate(hash_len as usize);
+                Some(bytes_to_hex_upper(&hash))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -156,11 +193,11 @@ fn extract_signer_subject(path: &str) -> Option<String> {
         let _ = CryptMsgClose(Some(msg as *const c_void));
         let _ = CertCloseStore(Some(store), 0);
 
-        subject
+        (subject, thumbprint)
     }
 }
 
-pub fn verify_file_signature(path: &str) -> TrustResult {
+pub fn verify_file_signature(path: &str, revocation: RevocationPolicy) -> TrustResult {
     unsafe {
         let wide = to_wide(path);
 
@@ -175,7 +212,10 @@ pub fn verify_file_signature(path: &str) -> TrustResult {
 
         data.cbStruct = size_of::<WINTRUST_DATA>() as u32;
         data.dwUIChoice = WTD_UI_NONE;
-        data.fdwRevocationChecks = WTD_REVOKE_NONE;
+        data.fdwRevocationChecks = match revocation {
+            RevocationPolicy::None => WTD_REVOKE_NONE,
+            RevocationPolicy::WholeChain => WTD_REVOKE_WHOLECHAIN,
+        };
         data.dwUnionChoice = WTD_CHOICE_FILE;
         data.dwStateAction = WTD_STATEACTION_VERIFY;
         data.Anonymous.pFile = &mut file_info;
@@ -196,17 +236,14 @@ pub fn verify_file_signature(path: &str) -> TrustResult {
         );
 
         let is_ok = status == ERROR_SUCCESS.0 as i32;
-
-        let signer_subject = if is_ok {
-            extract_signer_subject(path)
-        } else {
-            None
-        };
+        let (signer_subject, signer_thumbprint) = extract_signer_identity(path);
+        let is_signed = signer_subject.is_some() || signer_thumbprint.is_some();
 
         TrustResult {
-            is_signed: is_ok,
+            is_signed,
             is_trusted: is_ok,
             signer_subject,
+            signer_thumbprint,
         }
     }
 }
