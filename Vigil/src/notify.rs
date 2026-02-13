@@ -6,9 +6,9 @@ use std::{
 };
 
 use windows::{
-    core::HSTRING,
     Data::Xml::Dom::XmlDocument,
     UI::Notifications::{ToastNotification, ToastNotificationManager},
+    core::HSTRING,
 };
 
 const APP_ID: &str =

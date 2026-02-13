@@ -13,23 +13,23 @@ mod process;
 mod siem;
 mod wintrust;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::bounded;
 use engine::Engine;
 use std::{fs, path::PathBuf, sync::Arc, thread, time::Duration};
 use windows::{
-    core::PCWSTR,
     Win32::{
         Foundation::{CloseHandle, ERROR_NOT_ALL_ASSIGNED, GetLastError, LUID},
         Security::{
-            AdjustTokenPrivileges, GetTokenInformation, LookupPrivilegeValueW,
-            LUID_AND_ATTRIBUTES, TokenElevation, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION,
-            TOKEN_PRIVILEGES, TOKEN_QUERY, SE_PRIVILEGE_ENABLED,
+            AdjustTokenPrivileges, GetTokenInformation, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW,
+            SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION, TOKEN_PRIVILEGES,
+            TOKEN_QUERY, TokenElevation,
         },
-        System::Com::{CoInitializeEx, COINIT_MULTITHREADED},
+        System::Com::{COINIT_MULTITHREADED, CoInitializeEx},
         System::Threading::{GetCurrentProcess, OpenProcessToken},
-        UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK},
+        UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
     },
+    core::PCWSTR,
 };
 
 fn main() -> Result<()> {
@@ -88,7 +88,10 @@ fn run() -> Result<()> {
 
     if !cfg.general.quiet {
         if let Some(primary_log) = logger.primary_log_path() {
-            eprintln!("[TITAN Vigil] running; logging to {}", primary_log.display());
+            eprintln!(
+                "[TITAN Vigil] running; logging to {}",
+                primary_log.display()
+            );
         } else {
             eprintln!("[TITAN Vigil] running");
         }

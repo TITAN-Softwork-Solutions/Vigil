@@ -9,6 +9,7 @@ const SYSTEM_EXTENDED_HANDLE_INFORMATION: u32 = 64;
 const STATUS_INFO_LENGTH_MISMATCH: i32 = -1073741820; // 0xC0000004
 
 #[repr(C)]
+#[allow(non_snake_case)]
 #[derive(Clone, Copy)]
 struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX {
     Object: *mut c_void,
@@ -22,6 +23,7 @@ struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX {
 }
 
 #[repr(C)]
+#[allow(non_snake_case)]
 struct SYSTEM_HANDLE_INFORMATION_EX {
     NumberOfHandles: usize,
     Reserved: usize,

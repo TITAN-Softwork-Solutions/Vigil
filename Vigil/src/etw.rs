@@ -1,5 +1,5 @@
 use crate::{diag, engine::Engine};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::{
     ffi::c_void,
     mem::{size_of, zeroed},
@@ -8,22 +8,21 @@ use std::{
     time::Duration,
 };
 use windows::{
-    core::{GUID, PCWSTR, PWSTR},
     Win32::{
         Foundation::{
-            GetLastError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_SUCCESS,
-            ERROR_WMI_INSTANCE_NOT_FOUND,
+            ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, ERROR_WMI_INSTANCE_NOT_FOUND,
+            GetLastError,
         },
         System::Diagnostics::Etw::{
-            CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW,
-            ProcessTrace, StartTraceW, TdhGetProperty, TdhGetPropertySize,
-            CONTROLTRACE_HANDLE, EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD,
-            EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_LOGFILEW,
-            EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE,
-            PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_RAW_TIMESTAMP, PROCESS_TRACE_MODE_REAL_TIME, PROPERTY_DATA_DESCRIPTOR, TRACE_LEVEL_VERBOSE,
-            WNODE_FLAG_TRACED_GUID,
+            CONTROLTRACE_HANDLE, CloseTrace, ControlTraceW, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+            EVENT_RECORD, EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_LOGFILEW, EVENT_TRACE_PROPERTIES,
+            EVENT_TRACE_REAL_TIME_MODE, EnableTraceEx2, OpenTraceW,
+            PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_RAW_TIMESTAMP,
+            PROCESS_TRACE_MODE_REAL_TIME, PROPERTY_DATA_DESCRIPTOR, ProcessTrace, StartTraceW,
+            TRACE_LEVEL_VERBOSE, TdhGetProperty, TdhGetPropertySize, WNODE_FLAG_TRACED_GUID,
         },
     },
+    core::{GUID, PCWSTR, PWSTR},
 };
 
 const TRACE_NAME: &str = "TITAN-Vigil";
@@ -215,7 +214,10 @@ fn enable_provider(handle: CONTROLTRACE_HANDLE, guid: &GUID) -> Result<()> {
     };
 
     if status != ERROR_SUCCESS {
-        return Err(anyhow!("{}", format_win32_error("EnableTraceEx2", status.0)));
+        return Err(anyhow!(
+            "{}",
+            format_win32_error("EnableTraceEx2", status.0)
+        ));
     }
 
     Ok(())
@@ -278,7 +280,9 @@ fn format_win32_error(op: &str, code: u32) -> String {
 
 fn win32_hint(code: u32) -> Option<&'static str> {
     if code == ERROR_ACCESS_DENIED.0 {
-        return Some("access denied; run elevated and ensure EDR/tamper protection is not blocking kernel tracing");
+        return Some(
+            "access denied; run elevated and ensure EDR/tamper protection is not blocking kernel tracing",
+        );
     }
     if code == ERROR_ALREADY_EXISTS.0 {
         return Some("ETW session already exists; stop it with `logman stop TITAN-Vigil -ets`");

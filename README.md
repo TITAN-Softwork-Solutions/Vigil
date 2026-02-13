@@ -6,6 +6,15 @@ Windows blue-team telemetry utility that detects **untrusted processes accessing
 
 ![NOTIF BAR](Image/NOTIF_BAR.png)
 
+## Project Documentation
+
+- `README.md`: Runtime overview, configuration, and operations
+- `SECURITY.md`: Vulnerability reporting and security policy
+- `CONTRIBUTING.md`: Development and PR workflow
+- `CHANGELOG.md`: Notable project changes
+
+---
+
 ## What It Detects
 
 The engine monitors kernel-level file I/O events and raises alerts when:

@@ -174,7 +174,11 @@ fn default_siem_enabled() -> bool {
     true
 }
 fn default_siem_formats() -> Vec<String> {
-    vec!["jsonl".to_string(), "cef".to_string(), "sigma_json".to_string()]
+    vec![
+        "jsonl".to_string(),
+        "cef".to_string(),
+        "sigma_json".to_string(),
+    ]
 }
 fn default_generate_sigma_rules() -> bool {
     true
@@ -357,4 +361,89 @@ fn validate_siem_formats(formats: &[String]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn write_temp_config(content: &str) -> PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("titan-vigil-config-{ts}.toml"));
+        fs::write(&path, content).expect("failed to write temp config");
+        path
+    }
+
+    #[test]
+    fn normalize_thumbprint_strips_non_hex_and_uppercases() {
+        let got = normalize_thumbprint("aa:bb cc-dd_11".to_string());
+        assert_eq!(got, "AABBCCDD11");
+    }
+
+    #[test]
+    fn config_load_rejects_unknown_siem_format() {
+        let path = write_temp_config(
+            r#"
+[siem]
+formats = ["jsonl", "bogus"]
+"#,
+        );
+
+        let err = Config::load(&path).expect_err("config should fail");
+        let _ = fs::remove_file(&path);
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unknown siem format"));
+    }
+
+    #[test]
+    fn config_load_validates_endpoint_when_enabled() {
+        let path = write_temp_config(
+            r#"
+[endpoint_alert]
+enabled = true
+endpoint = ""
+"#,
+        );
+
+        let err = Config::load(&path).expect_err("config should fail");
+        let _ = fs::remove_file(&path);
+        let msg = format!("{err:#}");
+        assert!(msg.contains("endpoint_alert.enabled=true"));
+    }
+
+    #[test]
+    fn config_load_normalizes_allowlist_and_rules() {
+        let path = write_temp_config(
+            r#"
+[allowlist]
+signer_subject_allow = ["Microsoft Corporation"]
+process_name_allow = ["Chrome.exe"]
+
+[security]
+denylisted_cert_thumbprints = ["aa:bb:11"]
+
+[watch]
+protected_substrings = ["\\Users\\Damon\\Cookies"]
+"#,
+        );
+
+        let cfg = Config::load(&path).expect("config should load");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(
+            cfg.allowlist.signer_subject_allow[0],
+            "microsoft corporation"
+        );
+        assert_eq!(cfg.allowlist.process_name_allow[0], "chrome.exe");
+        assert_eq!(cfg.security.denylisted_cert_thumbprints[0], "AABB11");
+        assert_eq!(cfg.watch.protected[0].substring, "\\users\\damon\\cookies");
+    }
 }

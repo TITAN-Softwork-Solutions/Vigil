@@ -2,17 +2,17 @@ use anyhow::Result;
 use std::mem::size_of;
 
 use windows::{
-    core::PWSTR,
     Win32::{
         Foundation::CloseHandle,
         System::{
             ProcessStatus::EnumProcesses,
             Threading::{
-                OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-                PROCESS_QUERY_LIMITED_INFORMATION,
+                OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+                QueryFullProcessImageNameW,
             },
         },
     },
+    core::PWSTR,
 };
 
 pub fn enum_process_ids() -> Result<Vec<u32>> {
