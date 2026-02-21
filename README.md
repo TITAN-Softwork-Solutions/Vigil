@@ -1,10 +1,16 @@
-# TITAN Vigil
+<h1 align="center">TITAN Vigil</h1>
+<p align="center"><b>Kernel ETW Blue-Team Telemetry Engine</b></p>
 
-Windows blue-team telemetry utility that detects **untrusted processes accessing protected filesystem resources** using Kernel ETW, with enterprise-grade policy controls and SIEM-ready output formats.
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-Rust-000000?logo=rust&logoColor=white&style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white&style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Telemetry-Kernel%20ETW-5C2D91?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Output-SIEM%20Ready-2E8B57?style=for-the-badge" />
+</p>
 
----
-
-![NOTIF BAR](Image/NOTIF_BAR.png)
+<p align="center">
+Detects untrusted processes accessing protected filesystem resources using low-latency Kernel ETW instrumentation and deterministic policy evaluation.
+</p>
 
 ## Project Documentation
 
