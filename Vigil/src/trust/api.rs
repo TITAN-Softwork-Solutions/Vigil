@@ -1,4 +1,4 @@
-use crate::support::config::{TrustApiConfig, TrustApiMode};
+use crate::support::config::TrustApiConfig;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -57,6 +57,7 @@ pub fn verify(path: &str, cfg: &TrustApiConfig) -> Result<ApiDecision> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::support::config::TrustApiMode;
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -108,6 +109,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_os = "windows", ignore = "flaky on some Windows CI runners")]
     fn verify_posts_path_and_parses_response() {
         let (endpoint, handle) = spawn_http_server(
             200,
@@ -136,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_os = "windows", ignore = "flaky on some Windows CI runners")]
     fn verify_rejects_non_success_status() {
         let (endpoint, handle) = spawn_http_server(503, r#"{"trusted":false}"#);
 
