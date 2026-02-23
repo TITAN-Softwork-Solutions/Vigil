@@ -1,5 +1,6 @@
 use std::{ffi::c_void, mem::size_of, ptr::null_mut};
 
+use crate::support::win::to_wide;
 use windows::{
     Win32::{
         Foundation::{ERROR_SUCCESS, HWND},
@@ -14,9 +15,9 @@ use windows::{
                 X509_ASN_ENCODING,
             },
             WinTrust::{
-                WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_FILE_INFO,
-                WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE,
-                WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
+                WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
+                WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_REVOKE_WHOLECHAIN,
+                WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
             },
         },
     },
@@ -35,14 +36,6 @@ pub struct TrustResult {
     pub is_trusted: bool,
     pub signer_subject: Option<String>,
     pub signer_thumbprint: Option<String>,
-}
-
-fn to_wide(s: &str) -> Vec<u16> {
-    use std::os::windows::prelude::OsStrExt;
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(Some(0))
-        .collect()
 }
 
 fn bytes_to_hex_upper(bytes: &[u8]) -> String {
@@ -122,10 +115,11 @@ fn extract_signer_identity(path: &str) -> (Option<String>, Option<String>) {
 
         let signer_info = &*(buf.as_ptr() as *const CMSG_SIGNER_INFO);
 
-        let mut cert_info = CERT_INFO::default();
-
-        cert_info.Issuer = signer_info.Issuer.clone();
-        cert_info.SerialNumber = signer_info.SerialNumber.clone();
+        let cert_info = CERT_INFO {
+            Issuer: signer_info.Issuer,
+            SerialNumber: signer_info.SerialNumber,
+            ..Default::default()
+        };
 
         let cert_ctx = CertFindCertificateInStore(
             store,
@@ -198,6 +192,7 @@ fn extract_signer_identity(path: &str) -> (Option<String>, Option<String>) {
     }
 }
 
+#[allow(clippy::field_reassign_with_default)]
 pub fn verify_file_signature(path: &str, revocation: RevocationPolicy) -> TrustResult {
     unsafe {
         let wide = to_wide(path);
@@ -209,17 +204,20 @@ pub fn verify_file_signature(path: &str, revocation: RevocationPolicy) -> TrustR
             pgKnownSubject: null_mut(),
         };
 
-        let mut data = WINTRUST_DATA::default();
-
-        data.cbStruct = size_of::<WINTRUST_DATA>() as u32;
-        data.dwUIChoice = WTD_UI_NONE;
-        data.fdwRevocationChecks = match revocation {
-            RevocationPolicy::None => WTD_REVOKE_NONE,
-            RevocationPolicy::WholeChain => WTD_REVOKE_WHOLECHAIN,
+        let mut data = WINTRUST_DATA {
+            cbStruct: size_of::<WINTRUST_DATA>() as u32,
+            dwUIChoice: WTD_UI_NONE,
+            fdwRevocationChecks: match revocation {
+                RevocationPolicy::None => WTD_REVOKE_NONE,
+                RevocationPolicy::WholeChain => WTD_REVOKE_WHOLECHAIN,
+            },
+            dwUnionChoice: WTD_CHOICE_FILE,
+            dwStateAction: WTD_STATEACTION_VERIFY,
+            Anonymous: WINTRUST_DATA_0 {
+                pFile: &mut file_info,
+            },
+            ..Default::default()
         };
-        data.dwUnionChoice = WTD_CHOICE_FILE;
-        data.dwStateAction = WTD_STATEACTION_VERIFY;
-        data.Anonymous.pFile = &mut file_info;
 
         let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
 
@@ -238,7 +236,9 @@ pub fn verify_file_signature(path: &str, revocation: RevocationPolicy) -> TrustR
 
         let is_ok = status == ERROR_SUCCESS.0 as i32;
         let (signer_subject, signer_thumbprint) = extract_signer_identity(path);
-        let is_signed = signer_subject.is_some() || signer_thumbprint.is_some();
+        // Catalog-signed binaries may not expose embedded signer info; a successful
+        // WinVerifyTrust still indicates a valid signature chain.
+        let is_signed = is_ok || signer_subject.is_some() || signer_thumbprint.is_some();
 
         TrustResult {
             is_signed,

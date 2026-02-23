@@ -24,6 +24,9 @@ pub struct Config {
 
     #[serde(default)]
     pub siem: SiemConfig,
+
+    #[serde(default)]
+    pub trust_api: TrustApiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +47,7 @@ pub struct ProtectedRule {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WatchConfig {
     #[serde(default)]
     pub protected: Vec<ProtectedRule>,
@@ -56,7 +59,7 @@ pub struct WatchConfig {
     pub exact_paths: Vec<ProtectedRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AllowlistConfig {
     #[serde(default)]
     pub signer_subject_allow: Vec<String>,
@@ -89,6 +92,33 @@ pub struct SecurityConfig {
 
     #[serde(default)]
     pub denylisted_cert_thumbprints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustApiMode {
+    WintrustOnly,
+    ApiOnly,
+    PreferApi,
+    PreferWintrust,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustApiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_trust_api_endpoint")]
+    pub endpoint: String,
+
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    #[serde(default = "default_trust_api_timeout_ms")]
+    pub timeout_ms: u64,
+
+    #[serde(default = "default_trust_api_mode")]
+    pub mode: TrustApiMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +200,9 @@ fn default_connect_timeout_ms() -> u64 {
 fn default_endpoint_retries() -> usize {
     1
 }
+fn default_trust_api_timeout_ms() -> u64 {
+    2500
+}
 fn default_siem_enabled() -> bool {
     true
 }
@@ -186,6 +219,12 @@ fn default_generate_sigma_rules() -> bool {
 fn default_sigma_rules_file() -> String {
     "sigma_rules.yml".to_string()
 }
+fn default_trust_api_mode() -> TrustApiMode {
+    TrustApiMode::WintrustOnly
+}
+fn default_trust_api_endpoint() -> String {
+    String::new()
+}
 
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -193,25 +232,6 @@ impl Default for GeneralConfig {
             quiet: default_quiet(),
             jsonl: default_jsonl(),
             suppress_ms: default_suppress_ms(),
-        }
-    }
-}
-
-impl Default for WatchConfig {
-    fn default() -> Self {
-        Self {
-            protected: Vec::new(),
-            protected_substrings: Vec::new(),
-            exact_paths: Vec::new(),
-        }
-    }
-}
-
-impl Default for AllowlistConfig {
-    fn default() -> Self {
-        Self {
-            signer_subject_allow: Vec::new(),
-            process_name_allow: Vec::new(),
         }
     }
 }
@@ -256,6 +276,18 @@ impl Default for SiemConfig {
             formats: default_siem_formats(),
             generate_sigma_rules: default_generate_sigma_rules(),
             sigma_rules_file: default_sigma_rules_file(),
+        }
+    }
+}
+
+impl Default for TrustApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_trust_api_endpoint(),
+            api_key: None,
+            timeout_ms: default_trust_api_timeout_ms(),
+            mode: default_trust_api_mode(),
         }
     }
 }
@@ -324,6 +356,10 @@ impl Config {
 
         if cfg.endpoint_alert.enabled && cfg.endpoint_alert.endpoint.trim().is_empty() {
             anyhow::bail!("endpoint_alert.enabled=true but endpoint_alert.endpoint is empty");
+        }
+
+        if cfg.trust_api.enabled && cfg.trust_api.endpoint.trim().is_empty() {
+            anyhow::bail!("trust_api.enabled=true but trust_api.endpoint is empty");
         }
 
         cfg.siem.formats = cfg

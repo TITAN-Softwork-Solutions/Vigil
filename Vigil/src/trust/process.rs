@@ -3,7 +3,7 @@ use std::mem::size_of;
 
 use windows::{
     Win32::{
-        Foundation::CloseHandle,
+        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError},
         System::{
             ProcessStatus::EnumProcesses,
             Threading::{
@@ -51,25 +51,33 @@ pub fn get_process_image_path(pid: u32) -> Option<String> {
 
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut cap = 512usize;
+        loop {
+            let mut buf: Vec<u16> = vec![0u16; cap];
+            let mut size: u32 = buf.len() as u32;
 
-        let mut buf: Vec<u16> = vec![0u16; 4096];
-        let mut size: u32 = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(
+                h,
+                PROCESS_NAME_FORMAT(0),
+                PWSTR(buf.as_mut_ptr()),
+                &mut size,
+            )
+            .is_ok();
 
-        let ok = QueryFullProcessImageNameW(
-            h,
-            PROCESS_NAME_FORMAT(0),
-            PWSTR(buf.as_mut_ptr()),
-            &mut size,
-        )
-        .is_ok();
+            if ok && size > 0 {
+                let _ = CloseHandle(h);
+                buf.truncate(size as usize);
+                return Some(String::from_utf16_lossy(&buf));
+            }
 
-        let _ = CloseHandle(h);
+            let last = GetLastError();
+            if last == ERROR_INSUFFICIENT_BUFFER && cap < 32 * 1024 {
+                cap = cap.saturating_mul(2);
+                continue;
+            }
 
-        if !ok || size == 0 {
+            let _ = CloseHandle(h);
             return None;
         }
-
-        buf.truncate(size as usize);
-        Some(String::from_utf16_lossy(&buf))
     }
 }

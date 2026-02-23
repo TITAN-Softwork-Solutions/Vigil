@@ -9,9 +9,19 @@ Windows blue-team telemetry utility that detects **untrusted processes accessing
 ## Project Documentation
 
 - `README.md`: Runtime overview, configuration, and operations
-- `SECURITY.md`: Vulnerability reporting and security policy
 - `CONTRIBUTING.md`: Development and PR workflow
-- `CHANGELOG.md`: Notable project changes
+
+---
+
+## Repository Layout
+
+- `Vigil/src/main.rs`: entrypoint wiring config, logging, worker pool, ETW session lifecycle
+- `Vigil/src/runtime/`: detection engine state and alert orchestration
+- `Vigil/src/telemetry/`: Kernel ETW session management and trusted-handle discovery
+- `Vigil/src/trust/`: signer verification and process metadata helpers
+- `Vigil/src/output/`: alert schema, log sinks (JSONL/CEF/Sigma), endpoint forwarding, toast UX
+- `Vigil/src/support/`: config/CLI parsing and startup diagnostics
+- `tests/data_access_test/`: synthetic filesystem access generator used for validation
 
 ---
 
@@ -87,6 +97,7 @@ Key concepts:
   * Revocation mode
   * Compromised cert thumbprint denylist
   * Legacy fallback policy
+  * Optional operator trust API (mode: wintrust-only, api-only, prefer-api, prefer-wintrust)
 
 * **Concurrency policy**
 
@@ -149,6 +160,14 @@ protected = [
 [allowlist]
 signer_subject_allow = ["microsoft", "google"]
 process_name_allow = ["chrome.exe", "msedge.exe"]
+
+[trust_api]
+enabled = false
+endpoint = "https://trust.example.com/verify"
+api_key = "Bearer token-here"
+timeout_ms = 2500
+# modes: wintrust_only | api_only | prefer_api | prefer_wintrust
+mode = "prefer_api"
 ```
 
 ---
@@ -172,6 +191,19 @@ Logs are written to:
 ```
 
 When `siem.generate_sigma_rules = true`, a Sigma rules artifact is also generated in the same log directory (or the configured absolute path).
+
+### Feature flags
+
+- `remote_endpoint` (opt-in): build with UDP/TCP remote alert forwarding enabled. Example:  
+  `cargo run --release --features remote_endpoint -- --config config.toml`
+- `trust_api` (opt-in): call an operator HTTP trust API to decide signer trust, optionally replacing WinTrust. Example:  
+  `cargo run --release --features trust_api -- --config config.toml`
+
+### Testing
+
+- Core suite: `cargo test`
+- Remote endpoint suite (opt-in): `cargo test --features remote_endpoint -- output::endpoint`
+- Trust API suite (opt-in): `cargo test --features trust_api -- trust::api`
 
 ---
 

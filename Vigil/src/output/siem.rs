@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::support::config::Config;
 use anyhow::{Context, Result};
 use std::{
     fs,

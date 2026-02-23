@@ -1,12 +1,18 @@
+#[cfg(feature = "trust_api")]
+use crate::support::config::TrustApiMode;
+#[cfg(feature = "trust_api")]
+use crate::trust::api;
 use crate::{
-    alerts::Alert,
-    config::{Config, RevocationMode},
-    handles, process, wintrust,
+    output::alerts::Alert,
+    support::config::{Config, RevocationMode},
+    telemetry::handles,
+    trust::{process, wintrust},
 };
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -24,12 +30,10 @@ pub struct ProcMeta {
 pub struct Engine {
     cfg: Config,
     alert_tx: Sender<Alert>,
-    protected_exact_rules: BTreeMap<String, String>,
-    protected_substring_rules: BTreeMap<String, String>,
-    proc_cache: Mutex<HashMap<u32, ProcMeta>>,
-    filekey_cache: Mutex<HashMap<u64, String>>,
-    last_alert: Mutex<HashMap<u64, Instant>>,
-    whitelisted_file_objects: Mutex<HashMap<u64, WhitelistedFileObject>>,
+    protected_exact_rules: HashMap<String, String>,
+    protected_substring_rules: Vec<(String, String)>,
+    state: Mutex<EngineState>,
+    dropped_alerts: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -38,16 +42,24 @@ struct WhitelistedFileObject {
     last_seen: Instant,
 }
 
+#[derive(Debug)]
+struct EngineState {
+    proc_cache: HashMap<u32, ProcMeta>,
+    filekey_cache: HashMap<u64, String>,
+    last_alert: HashMap<u64, Instant>,
+    whitelisted_file_objects: HashMap<u64, WhitelistedFileObject>,
+}
+
 impl Engine {
     pub fn new(cfg: Config, alert_tx: Sender<Alert>) -> Self {
-        let mut protected_exact_rules = BTreeMap::new();
+        let mut protected_exact_rules = HashMap::new();
         for rule in &cfg.watch.exact_paths {
             protected_exact_rules.insert(rule.substring.clone(), rule.name.clone());
         }
 
-        let mut protected_substring_rules = BTreeMap::new();
+        let mut protected_substring_rules = Vec::new();
         for rule in &cfg.watch.protected {
-            protected_substring_rules.insert(rule.substring.clone(), rule.name.clone());
+            protected_substring_rules.push((rule.substring.clone(), rule.name.clone()));
         }
 
         Self {
@@ -55,10 +67,13 @@ impl Engine {
             alert_tx,
             protected_exact_rules,
             protected_substring_rules,
-            proc_cache: Mutex::new(HashMap::new()),
-            filekey_cache: Mutex::new(HashMap::new()),
-            last_alert: Mutex::new(HashMap::new()),
-            whitelisted_file_objects: Mutex::new(HashMap::new()),
+            state: Mutex::new(EngineState {
+                proc_cache: HashMap::new(),
+                filekey_cache: HashMap::new(),
+                last_alert: HashMap::new(),
+                whitelisted_file_objects: HashMap::new(),
+            }),
+            dropped_alerts: AtomicU64::new(0),
         }
     }
 
@@ -74,7 +89,7 @@ impl Engine {
 
             let trust = self.trust_for_path(&img);
             if trust.is_trusted {
-                self.proc_cache.lock().insert(
+                self.state.lock().proc_cache.insert(
                     pid,
                     ProcMeta {
                         image: img.clone(),
@@ -96,7 +111,8 @@ impl Engine {
         }
 
         let now = Instant::now();
-        let mut wl = self.whitelisted_file_objects.lock();
+        let mut state = self.state.lock();
+        let wl = &mut state.whitelisted_file_objects;
         for (file_object, pids_set) in entries {
             let entry = wl
                 .entry(file_object)
@@ -120,7 +136,7 @@ impl Engine {
 
         let (is_trusted, _) = self.trust_for_image(&image);
 
-        self.proc_cache.lock().insert(
+        self.state.lock().proc_cache.insert(
             pid,
             ProcMeta {
                 image,
@@ -132,17 +148,17 @@ impl Engine {
 
     #[inline]
     pub fn on_file_name_mapping(&self, file_key: u64, file_name: String) {
-        self.filekey_cache.lock().insert(file_key, file_name);
+        self.state.lock().filekey_cache.insert(file_key, file_name);
     }
 
     #[inline]
     pub fn clear_file_key(&self, file_key: u64) {
-        self.filekey_cache.lock().remove(&file_key);
+        self.state.lock().filekey_cache.remove(&file_key);
     }
 
     #[inline]
     pub fn resolve_file_key(&self, file_key: u64) -> Option<String> {
-        self.filekey_cache.lock().get(&file_key).cloned()
+        self.state.lock().filekey_cache.get(&file_key).cloned()
     }
 
     #[inline]
@@ -152,17 +168,16 @@ impl Engine {
         }
 
         let ttl = Duration::from_secs(10);
-
-        if let Some(meta) = self.proc_cache.lock().get(&pid).cloned() {
-            if meta.ts.elapsed() <= ttl {
-                return meta.image;
-            }
+        if let Some(meta) = self.state.lock().proc_cache.get(&pid).cloned()
+            && meta.ts.elapsed() <= ttl
+        {
+            return meta.image;
         }
 
         let img = process::get_process_image_path(pid).unwrap_or_else(|| "unknown".to_string());
         let (is_trusted, _) = self.trust_for_image(&img);
 
-        self.proc_cache.lock().insert(
+        self.state.lock().proc_cache.insert(
             pid,
             ProcMeta {
                 image: img.clone(),
@@ -205,15 +220,15 @@ impl Engine {
             return true;
         }
 
-        if let Some(meta) = self.proc_cache.lock().get(&pid) {
-            if meta.ts.elapsed() <= Duration::from_secs(60) {
-                return meta.is_trusted_signed;
-            }
+        if let Some(meta) = self.state.lock().proc_cache.get(&pid)
+            && meta.ts.elapsed() <= Duration::from_secs(60)
+        {
+            return meta.is_trusted_signed;
         }
 
         let (is_trusted, _) = self.trust_for_image(proc_path);
 
-        self.proc_cache.lock().insert(
+        self.state.lock().proc_cache.insert(
             pid,
             ProcMeta {
                 image: proc_path.to_string(),
@@ -231,7 +246,8 @@ impl Engine {
             return;
         }
         let now = Instant::now();
-        let mut wl = self.whitelisted_file_objects.lock();
+        let mut state = self.state.lock();
+        let wl = &mut state.whitelisted_file_objects;
 
         if wl.len() > WHITELIST_MAX {
             wl.retain(|_, v| now.duration_since(v.last_seen) <= WHITELIST_TTL);
@@ -250,17 +266,18 @@ impl Engine {
     #[inline]
     pub fn whitelisted_file_object_owner(&self, file_object: u64) -> Option<HashSet<u32>> {
         let now = Instant::now();
-        let mut wl = self.whitelisted_file_objects.lock();
-        let Some(entry) = wl.get(&file_object) else {
-            return None;
-        };
+        let mut state = self.state.lock();
+        let wl = &mut state.whitelisted_file_objects;
+        let entry = wl.get(&file_object)?;
 
-        if now.duration_since(entry.last_seen) > WHITELIST_TTL {
+        let expired = now.duration_since(entry.last_seen) > WHITELIST_TTL;
+        let owners = entry.owners.clone();
+        if expired {
             wl.remove(&file_object);
             return None;
         }
 
-        Some(entry.owners.clone())
+        Some(owners)
     }
 
     fn dedupe_key(pid: u32, target: &str) -> u64 {
@@ -282,11 +299,12 @@ impl Engine {
         let now = Instant::now();
         let suppress = Duration::from_millis(self.cfg.general.suppress_ms);
 
-        let mut map = self.last_alert.lock();
-        if let Some(prev) = map.get(&key) {
-            if now.duration_since(*prev) < suppress {
-                return true;
-            }
+        let mut state = self.state.lock();
+        let map = &mut state.last_alert;
+        if let Some(prev) = map.get(&key)
+            && now.duration_since(*prev) < suppress
+        {
+            return true;
         }
         map.insert(key, now);
 
@@ -298,6 +316,7 @@ impl Engine {
     }
 
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub fn alert(
         &self,
         pid: u32,
@@ -312,14 +331,102 @@ impl Engine {
             return;
         }
 
-        let _ = self.alert_tx.send(Alert::new(
-            pid, process, target, data_name, event_id, kind, note,
-        ));
+        let alert = Alert::new(pid, process, target, data_name, event_id, kind, note);
+        if self.alert_tx.try_send(alert).is_err() {
+            self.dropped_alerts.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn take_dropped_alerts(&self) -> u64 {
+        self.dropped_alerts.swap(0, Ordering::Relaxed)
+    }
+
+    // Execution ring: resolve → rule match → trust → whitelist → alert.
+    pub fn handle_file_access(&self, pid: u32, event_id: u16, target: String, file_object: u64) {
+        let Some((data_name, _)) = self.match_protected_rule(&target) else {
+            return;
+        };
+
+        let proc_path = self.resolve_process_image(pid);
+
+        if self.is_pid_trusted(pid, &proc_path) {
+            if file_object != 0 {
+                self.learn_whitelisted_file_object(file_object, pid);
+            }
+            return;
+        }
+
+        if file_object != 0
+            && let Some(owners) = self.whitelisted_file_object_owner(file_object)
+            && !owners.is_empty()
+        {
+            self.alert(
+                pid,
+                proc_path,
+                target,
+                data_name,
+                event_id,
+                "suspicious_whitelisted_handle_access",
+                "untrusted process touched protected resource via whitelisted file object",
+            );
+            return;
+        }
+
+        self.alert(
+            pid,
+            proc_path,
+            target,
+            data_name,
+            event_id,
+            "protected_resource_access",
+            "untrusted process attempted access to protected resource",
+        );
     }
 
     #[inline]
     fn trust_for_path(&self, path: &str) -> wintrust::TrustResult {
         let trust = wintrust::verify_file_signature(path, self.revocation_policy());
+
+        #[cfg(feature = "trust_api")]
+        {
+            if self.cfg.trust_api.enabled {
+                let api_decision = api::verify(path, &self.cfg.trust_api);
+                match self.cfg.trust_api.mode {
+                    TrustApiMode::ApiOnly => {
+                        if let Ok(decision) = api_decision {
+                            return self.trust_from_api(decision);
+                        }
+                        if let Err(e) = api_decision {
+                            eprintln!("[TRUST_API] {:?}", e);
+                            return wintrust::TrustResult {
+                                is_signed: false,
+                                is_trusted: false,
+                                signer_subject: None,
+                                signer_thumbprint: None,
+                            };
+                        }
+                    }
+                    TrustApiMode::PreferApi => {
+                        if let Ok(decision) = api_decision {
+                            return self.trust_from_api(decision);
+                        }
+                    }
+                    TrustApiMode::PreferWintrust => {
+                        if trust.is_trusted {
+                            return trust;
+                        }
+                        if let Ok(decision) = api_decision {
+                            return self.trust_from_api(decision);
+                        }
+                    }
+                    TrustApiMode::WintrustOnly => {}
+                }
+
+                if let Err(e) = api_decision {
+                    eprintln!("[TRUST_API] {:?}", e);
+                }
+            }
+        }
 
         if self.cfg.security.require_signature && !trust.is_signed {
             return wintrust::TrustResult {
@@ -402,6 +509,16 @@ impl Engine {
         match self.cfg.security.revocation_mode {
             RevocationMode::None => wintrust::RevocationPolicy::None,
             RevocationMode::Chain => wintrust::RevocationPolicy::WholeChain,
+        }
+    }
+
+    #[cfg(feature = "trust_api")]
+    fn trust_from_api(&self, decision: api::ApiDecision) -> wintrust::TrustResult {
+        wintrust::TrustResult {
+            is_signed: decision.is_signed,
+            is_trusted: decision.is_trusted,
+            signer_subject: decision.signer_subject,
+            signer_thumbprint: decision.signer_thumbprint,
         }
     }
 }
