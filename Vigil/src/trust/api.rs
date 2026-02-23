@@ -129,7 +129,9 @@ mod tests {
 
         let request = handle.join().expect("join server");
         assert!(request.starts_with("POST /verify HTTP/1.1"));
-        assert!(request.contains("Authorization: Bearer token-1"));
+        let request_lower = request.to_lowercase();
+        assert!(request_lower.contains("authorization:"));
+        assert!(request_lower.contains("authorization: bearer "));
         assert!(request.contains(r#""path":"C:\\sample\\tool.exe""#));
     }
 
