@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::support::config::Config;
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -85,10 +85,11 @@ impl Alert {
 
     pub fn sigma_json(&self) -> serde_json::Value {
         let mut tags = Vec::new();
-        if self.data_name.to_lowercase().contains("cookie") {
+        let data_low = self.data_name.to_lowercase();
+        if data_low.contains("cookie") {
             tags.push("attack.collection");
         }
-        if self.data_name.to_lowercase().contains("password") {
+        if data_low.contains("password") {
             tags.push("attack.credential_access");
         }
         serde_json::json!({
@@ -219,8 +220,7 @@ fn sanitize_cef(input: &str) -> String {
         .replace('\\', "\\\\")
         .replace('|', "\\|")
         .replace('=', "\\=")
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
 }
 
 fn open_sink_file(log_dir: &Path, file_name: &str) -> Result<(PathBuf, File)> {
@@ -260,9 +260,9 @@ fn open_append_file(path: &Path) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
+    use crate::support::config::{
         AllowlistConfig, ConcurrencyConfig, EndpointAlertConfig, GeneralConfig, SecurityConfig,
-        SiemConfig, WatchConfig,
+        SiemConfig, TrustApiConfig, WatchConfig,
     };
     use std::{
         fs,
@@ -287,6 +287,7 @@ mod tests {
                 generate_sigma_rules: false,
                 sigma_rules_file: "sigma_rules.yml".to_string(),
             },
+            trust_api: TrustApiConfig::default(),
         }
     }
 

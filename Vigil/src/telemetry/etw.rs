@@ -1,4 +1,7 @@
-use crate::{diag, engine::Engine};
+use crate::{
+    runtime::engine::Engine,
+    support::{diag, win::to_wide},
+};
 use anyhow::{Result, anyhow};
 use std::{
     ffi::c_void,
@@ -242,7 +245,7 @@ fn stop_trace_by_name(trace_name: &[u16]) -> Result<()> {
 }
 
 fn build_properties(trace_name: &[u16]) -> (Vec<u8>, *mut EVENT_TRACE_PROPERTIES) {
-    let name_bytes = trace_name.len() * size_of::<u16>();
+    let name_bytes = std::mem::size_of_val(trace_name);
     let total_size = size_of::<EVENT_TRACE_PROPERTIES>() + name_bytes;
     let mut buf = vec![0u8; total_size];
     let props = buf.as_mut_ptr() as *mut EVENT_TRACE_PROPERTIES;
@@ -259,14 +262,6 @@ fn build_properties(trace_name: &[u16]) -> (Vec<u8>, *mut EVENT_TRACE_PROPERTIES
     }
 
     (buf, props)
-}
-
-fn to_wide(s: &str) -> Vec<u16> {
-    use std::os::windows::prelude::OsStrExt;
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(Some(0))
-        .collect()
 }
 
 fn format_win32_error(op: &str, code: u32) -> String {
@@ -365,45 +360,7 @@ unsafe extern "system" fn event_record_callback(record: *mut EVENT_RECORD) {
         return;
     };
 
-    let Some((data_name, _)) = engine.match_protected_rule(&target) else {
-        return;
-    };
-
-    let proc_path = engine.resolve_process_image(pid);
-
-    if engine.is_pid_trusted(pid, &proc_path) {
-        if file_object != 0 {
-            engine.learn_whitelisted_file_object(file_object, pid);
-        }
-        return;
-    }
-
-    if file_object != 0 {
-        if let Some(owners) = engine.whitelisted_file_object_owner(file_object) {
-            if !owners.is_empty() {
-                engine.alert(
-                    pid,
-                    proc_path,
-                    target,
-                    data_name,
-                    event_id,
-                    "suspicious_whitelisted_handle_access",
-                    "untrusted process touched protected resource via whitelisted file object",
-                );
-                return;
-            }
-        }
-    }
-
-    engine.alert(
-        pid,
-        proc_path,
-        target,
-        data_name,
-        event_id,
-        "protected_resource_access",
-        "untrusted process attempted access to protected resource",
-    );
+    engine.handle_file_access(pid, event_id, target, file_object);
 }
 
 fn get_property_bytes(record: *mut EVENT_RECORD, name: &str) -> Option<Vec<u8>> {

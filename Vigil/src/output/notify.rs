@@ -1,4 +1,4 @@
-use crate::alerts::Alert;
+use crate::output::alerts::Alert;
 use std::{
     collections::HashMap,
     sync::{Mutex, OnceLock},

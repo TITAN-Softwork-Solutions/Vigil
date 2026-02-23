@@ -1,22 +1,18 @@
 #![windows_subsystem = "console"]
 
-mod alerts;
-mod cli;
-mod config;
-mod diag;
-mod endpoint;
-mod engine;
-mod etw;
-mod handles;
-mod notify;
-mod process;
-mod siem;
-mod wintrust;
+mod output;
+mod runtime;
+mod support;
+mod telemetry;
+mod trust;
 
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::bounded;
-use engine::Engine;
+#[cfg(feature = "remote_endpoint")]
+use output::endpoint;
+use runtime::engine::Engine;
 use std::{fs, path::PathBuf, sync::Arc, thread, time::Duration};
+use support::{diag, win::to_wide};
 use windows::{
     Win32::{
         Foundation::{CloseHandle, ERROR_NOT_ALL_ASSIGNED, GetLastError, LUID},
@@ -47,21 +43,21 @@ fn run() -> Result<()> {
     }
     diag::startup("COM initialized");
 
-    let cli = cli::Cli::parse();
+    let cli = support::cli::Cli::parse();
 
     let mut cfg_path = cli.config.clone();
-    if !cli.config_explicit && !cfg_path.exists() {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let candidate = dir.join("config.toml");
-                if candidate.exists() {
-                    cfg_path = candidate;
-                }
-            }
+    if !cli.config_explicit
+        && !cfg_path.exists()
+        && let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("config.toml");
+        if candidate.exists() {
+            cfg_path = candidate;
         }
     }
 
-    let cfg = config::Config::load(&cfg_path)
+    let cfg = support::config::Config::load(&cfg_path)
         .with_context(|| format!("failed to load config from {}", cfg_path.display()))?;
     diag::startup(&format!("config loaded from {}", cfg_path.display()));
     ensure_elevated().context("elevation preflight failed")?;
@@ -69,7 +65,8 @@ fn run() -> Result<()> {
     ensure_kernel_trace_privilege().context("failed to enable SeSystemProfilePrivilege")?;
     diag::startup("SeSystemProfilePrivilege enabled");
 
-    let (alert_tx, alert_rx) = bounded::<alerts::Alert>(cfg.concurrency.alert_channel_capacity);
+    let (alert_tx, alert_rx) =
+        bounded::<output::alerts::Alert>(cfg.concurrency.alert_channel_capacity);
 
     let engine = Arc::new(Engine::new(cfg.clone(), alert_tx.clone()));
 
@@ -81,9 +78,10 @@ fn run() -> Result<()> {
         .with_context(|| format!("failed to create log directory {}", log_dir.display()))?;
     diag::startup(&format!("log dir ready: {}", log_dir.display()));
     let logger = Arc::new(
-        alerts::AlertLogger::new(&log_dir, &cfg)
+        output::alerts::AlertLogger::new(&log_dir, &cfg)
             .with_context(|| format!("failed to initialize logger in {}", log_dir.display()))?,
     );
+    #[cfg(feature = "remote_endpoint")]
     let endpoint = Arc::new(endpoint::EndpointAlerter::from_config(&cfg.endpoint_alert));
 
     if !cfg.general.quiet {
@@ -97,7 +95,7 @@ fn run() -> Result<()> {
         }
     }
 
-    if let Some(path) = siem::generate_sigma_rules(&cfg, &log_dir)
+    if let Some(path) = output::siem::generate_sigma_rules(&cfg, &log_dir)
         .with_context(|| format!("failed to generate sigma rules in {}", log_dir.display()))?
     {
         diag::startup(&format!("sigma rules generated: {}", path.display()));
@@ -111,12 +109,13 @@ fn run() -> Result<()> {
     for idx in 0..worker_count {
         let rx = alert_rx.clone();
         let logger = logger.clone();
+        #[cfg(feature = "remote_endpoint")]
         let endpoint = endpoint.clone();
         thread::Builder::new()
             .name(format!("vigil-alert-worker-{idx}"))
             .spawn(move || {
                 while let Ok(alert) = rx.recv() {
-                    notify::toast_from_alert(&alert);
+                    output::notify::toast_from_alert(&alert);
 
                     if verbose {
                         println!("{}", alert.human_line());
@@ -126,10 +125,11 @@ fn run() -> Result<()> {
                         eprintln!("[TML][LOG] {:?}", e);
                     }
 
-                    if endpoint.is_enabled() {
-                        if let Err(e) = endpoint.send(&alert) {
-                            eprintln!("[TML][ENDPOINT] {:?}", e);
-                        }
+                    #[cfg(feature = "remote_endpoint")]
+                    if endpoint.is_enabled()
+                        && let Err(e) = endpoint.send(&alert)
+                    {
+                        eprintln!("[TML][ENDPOINT] {:?}", e);
                     }
                 }
             })?;
@@ -137,11 +137,15 @@ fn run() -> Result<()> {
 
     let _ = engine.preflight_trusted_handles();
     diag::startup("preflight trusted handle scan completed");
-    let _session = etw::start_etw(engine.clone())?;
+    let _session = telemetry::etw::start_etw(engine.clone())?;
     diag::startup("ETW session started");
 
     loop {
         thread::sleep(Duration::from_secs(60));
+        let dropped = engine.take_dropped_alerts();
+        if dropped > 0 {
+            eprintln!("[TITAN Vigil] dropped {dropped} alerts due to backpressure");
+        }
     }
 }
 
@@ -169,14 +173,6 @@ fn show_startup_error(err: &anyhow::Error) {
             MB_OK | MB_ICONERROR,
         );
     }
-}
-
-fn to_wide(s: &str) -> Vec<u16> {
-    use std::os::windows::prelude::OsStrExt;
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(Some(0))
-        .collect()
 }
 
 fn ensure_elevated() -> Result<()> {
